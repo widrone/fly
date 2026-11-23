@@ -1,12 +1,12 @@
 // All the words in the experience, in each language.
-// To change what Nimbus says, edit the text here. {N} is replaced by ", <name>" when a name is given.
+// To change what Nimbus says, edit the text here.
 // To add a language, copy the `en` block, translate it, and add an option in template.html.
 
 export const LANGS = {
   en: {
     speech: 'en',
     steps: {
-      welcome: { title: "Hi{N}! I'm Nimbus.", text: "I'm a little cloud, and I've been flying next to airplanes my whole life. Today we're going on a practice flight — together!" },
+      welcome: { title: "Hi! I'm Nimbus.", text: "I'm a little cloud, and I've been flying next to airplanes my whole life. Today we're going on a practice flight — together!" },
       boss: { title: "You're the boss", text: "Nothing happens until you press a button. If you ever want a break, press the Break button in the corner, and we'll float right back here. Try it whenever you like!" },
       breathe: { title: 'Cloud breathing', text: "Here's my favourite trick for wobbly feelings. Breathe in through your nose while I puff up big… then blow out slowly while I shrink. Let's do it three times." },
       breathed: { title: 'Great breathing!', text: 'You can do cloud breathing anytime: at the airport, on the plane, even right now. Ready to visit the airport?' },
@@ -26,7 +26,7 @@ export const LANGS = {
       bumps2: { title: 'Try some bumps?', text: 'You choose how bumpy! Watch the water in your cup and the tip of the wing wiggle. Bumps feel funny, but they are not dangerous.' },
       bumps3: { title: 'When it gets bumpy', text: 'Keep your seatbelt on, sit back and do cloud breathing. Squeeze something soft, or hold a grown-up’s hand. The bumps always stop again.' },
       land0: { title: 'Time to land', text: 'Tray table away, seatbelt on. The engines get quieter, we glide down through the clouds, the wheels come out with a whoosh, a rumble and a clunk, and then bump! We are on the ground.' },
-      done: { title: 'You did it{N}!', text: 'You flew a whole flight: takeoff, clouds, bumps and landing! Every time you practise, it gets a little easier. I am so proud of you.' },
+      done: { title: 'You did it!', text: 'You flew a whole flight: takeoff, clouds, bumps and landing! Every time you practise, it gets a little easier. I am so proud of you.' },
       break: { title: 'Break time', say: 'Take as long as you like. Breathe with me.' },
       free: { title: 'Cloud Lounge', say: 'Stay as long as you like.' },
     },
@@ -87,8 +87,6 @@ export const LANGS = {
       docTitle: 'Practice Flight with Nimbus',
       title: 'Practice Flight<br>with Nimbus',
       sub: 'A gentle, step-by-step VR flight for kids who feel nervous about flying. A friendly cloud explains every sound and bump before it happens — and nothing moves on until your child presses a button.',
-      name: "Flyer's first name (optional)",
-      namePh: 'e.g. Oskar',
       chapter: 'Start from',
       chapters: ['The beginning (Cloud Lounge)', 'At the airport', 'In my seat', 'Takeoff', 'Cruising', 'Bumps (turbulence)', 'Landing'],
       voice: 'Read the words out loud',
@@ -126,7 +124,7 @@ export const LANGS = {
   nb: {
     speech: 'nb',
     steps: {
-      welcome: { title: 'Hei{N}! Jeg er Nimbus.', text: 'Jeg er en liten sky, og jeg har svevd ved siden av fly hele livet. I dag skal vi på en liten øvingstur med fly – sammen!' },
+      welcome: { title: 'Hei! Jeg er Nimbus.', text: 'Jeg er en liten sky, og jeg har svevd ved siden av fly hele livet. I dag skal vi på en liten øvingstur med fly – sammen!' },
       boss: { title: 'Det er du som bestemmer', text: 'Ingenting skjer før du trykker på en knapp. Vil du ha en pause, trykker du på Pause-knappen i hjørnet, så svever vi rett tilbake hit. Prøv den når du vil!' },
       breathe: { title: 'Skypust', text: 'Her er favoritt-trikset mitt når det kribler i magen. Pust inn gjennom nesen mens jeg blåser meg stor … og blås sakte ut mens jeg krymper. Vi gjør det tre ganger.' },
       breathed: { title: 'Så fint du pustet!', text: 'Du kan bruke skypust når du vil: på flyplassen, på flyet, ja, til og med akkurat nå. Klar for å besøke flyplassen?' },
@@ -146,7 +144,7 @@ export const LANGS = {
       bumps2: { title: 'Vil du prøve noen humper?', text: 'Du bestemmer hvor humpete det blir! Se hvordan vannet i koppen og vingespissen vipper. Humper kjennes rart, men de er ikke farlige.' },
       bumps3: { title: 'Når det blir humpete', text: 'Ha setebeltet på, len deg tilbake og bruk skypust. Klem på noe mykt, eller hold en voksen i hånda. Humpene går alltid over igjen.' },
       land0: { title: 'Nå skal vi lande', text: 'Bordet slås opp, og setebeltet er på. Motorene blir roligere, vi glir ned gjennom skyene, hjulene kommer ut med et sus, en rumling og et klonk, og så – dunk! Da står vi på bakken.' },
-      done: { title: 'Du klarte det{N}!', text: 'Du fløy en hel flytur: avgang, skyer, humper og landing! Hver gang du øver, blir det litt lettere. Jeg er så stolt av deg.' },
+      done: { title: 'Du klarte det!', text: 'Du fløy en hel flytur: avgang, skyer, humper og landing! Hver gang du øver, blir det litt lettere. Jeg er så stolt av deg.' },
       break: { title: 'Pause', say: 'Ta den tiden du trenger. Pust sammen med meg.' },
       free: { title: 'Skyloungen', say: 'Bli her så lenge du vil.' },
     },
@@ -207,8 +205,6 @@ export const LANGS = {
       docTitle: 'Øvingstur med Nimbus',
       title: 'Øvingstur<br>med Nimbus',
       sub: 'En rolig VR-flytur, steg for steg, for barn som gruer seg til å fly. En vennlig sky forklarer hver lyd og hver hump før den kommer – og ingenting skjer før barnet trykker på en knapp.',
-      name: 'Fornavnet til den som skal fly (valgfritt)',
-      namePh: 'f.eks. Oskar',
       chapter: 'Start fra',
       chapters: ['Begynnelsen (Skyloungen)', 'På flyplassen', 'I setet mitt', 'Avgang', 'Høyt oppe i lufta', 'Humper (turbulens)', 'Landing'],
       voice: 'Les teksten høyt',

@@ -19,7 +19,7 @@ const smooth = (t) => {
 
 const sound = new Sound();
 const voice = new Voice();
-let NAME = '';
+voice.loadClips('nb', 'voice/nb/');
 let LANG = pickLanguage();
 let L = LANGS[LANG];
 
@@ -461,7 +461,6 @@ function updateBreath(dt) {
 }
 
 // ------------------------------------------------------------ the story
-const N = (s) => s.replace('{N}', NAME ? `, ${NAME}` : '');
 // The story. The words for each step live in i18n.js under steps.<id>; buttons are [label key, action, style].
 const STEPS = [
   { id: 'welcome', setup: 'lounge', calm: false, buttons: [['hiNimbus', 'next']] },
@@ -518,8 +517,8 @@ function stepContent(st, extra = {}) {
   }
   const w = words(st.id);
   return {
-    title: w.title ? N(w.title) : '',
-    text: w.text ? N(w.text) : '',
+    title: w.title || '',
+    text: w.text || '',
     buttons: buttons.map(([k, a, style]) => [L.btn[k] || k, a, style]),
     calm: st.calm,
     progress: st.progress,
@@ -930,7 +929,6 @@ let running = false;
 let xrSession = null;
 
 function readOptions() {
-  NAME = ($('name').value || '').trim().slice(0, 20);
   voice.on = $('voice').checked;
   sound.setHaptics(parseFloat($('rumble').value));
   return $('chapter').value;
@@ -951,6 +949,7 @@ async function begin(chapter) {
 async function enterVR() {
   const chapter = readOptions();
   sound.init();
+  voice.attach(sound.ctx);
   try {
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['hand-tracking'] });
     xrSession = session;
@@ -970,6 +969,7 @@ async function enterVR() {
 function preview() {
   const chapter = readOptions();
   sound.init();
+  voice.attach(sound.ctx);
   $('hud').classList.remove('hidden');
   begin(chapter);
 }
@@ -997,6 +997,7 @@ $('exit').addEventListener('click', exitExperience);
 $('rumble').addEventListener('change', () => sound.setHaptics(parseFloat($('rumble').value)));
 $('testRumble').addEventListener('click', () => {
   sound.init();
+  voice.attach(sound.ctx);
   sound.setHaptics(parseFloat($('rumble').value));
   sound.testRumble();
 });
@@ -1021,7 +1022,6 @@ function setLanguage(code) {
   document.title = P.docTitle;
   document.querySelectorAll('[data-t]').forEach((el) => (el.textContent = P[el.dataset.t]));
   document.querySelectorAll('[data-th]').forEach((el) => (el.innerHTML = P[el.dataset.th]));
-  $('name').placeholder = P.namePh;
   [...$('chapter').options].forEach((o, i) => (o.textContent = P.chapters[i]));
   [...$('rumble').options].forEach((o, i) => (o.textContent = P.rumbleOpts[i]));
   $('tips').innerHTML = P.tips.map((t) => `<li>${t}</li>`).join('');

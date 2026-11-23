@@ -1,4 +1,5 @@
-// Sound engine: everything is synthesized with Web Audio, no audio files.
+// Sound engine: everything is synthesized with Web Audio, no audio files (apart from the
+// optional pre-recorded voice lines, see Voice below).
 //
 //  - Sources are placed in 3D (HRTF) in the cabin frame: engines outside the left/right
 //    windows, the wheels under the floor, chimes overhead, people around you.
@@ -6,6 +7,8 @@
 //    through a Woojer strap/vest. It is mixed into the normal output (the Woojer turns
 //    the low end of the audio into vibration), and its level is set from the start page.
 //  - Ambience is driven by update(state) ~10x per second; events are one-shot methods.
+
+import { clipName, speechText } from './voiceclips.js';
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
@@ -928,6 +931,8 @@ export class Sound {
 
 // Text-to-speech narration, if the browser offers a voice for the chosen language.
 export class Voice {
+  // Reads Nimbus's lines aloud. A pre-made recording (docs/voice/<lang>/) is used when there is
+  // one for the exact words; otherwise the browser's own text-to-speech voice, if it has one.
   constructor() {
     this.on = true;
     this.lang = 'en';
@@ -935,6 +940,11 @@ export class Voice {
     this.available = false;
     this.onSpeaking = null;
     this.onVoices = null;
+    this.clips = {}; // lang -> { base, names: Set }
+    this.buffers = new Map(); // url -> Promise<AudioBuffer>
+    this.ctx = null;
+    this.src = null;
+    this.token = 0;
     this.ok = typeof window !== 'undefined' && 'speechSynthesis' in window;
     if (this.ok) {
       try {
@@ -946,14 +956,60 @@ export class Voice {
     }
     this._pick();
   }
+  // Look for recordings for a language: <base>index.json lists the MP3 files.
+  loadClips(lang, base) {
+    if (typeof fetch === 'undefined') return;
+    fetch(base + 'index.json')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => {
+        if (!Array.isArray(list) || !list.length) return;
+        this.clips[lang] = { base, names: new Set(list) };
+        this._pick();
+        if (this.onVoices) this.onVoices();
+        if (this.ctx) this._prefetch();
+      })
+      .catch(() => {});
+  }
+  // Recordings play through the same AudioContext as the rest of the sound.
+  attach(ctx) {
+    if (!ctx || this.ctx === ctx) return;
+    this.ctx = ctx;
+    this.out = ctx.createGain();
+    this.out.gain.value = 1.0;
+    this.out.connect(ctx.destination);
+    this._prefetch();
+  }
+  _prefetch() {
+    const c = this.clips[this.lang];
+    if (!c || !this.ctx) return;
+    for (const n of c.names) this._buffer(c.base + n);
+  }
+  _buffer(url) {
+    if (!this.buffers.has(url)) {
+      const p = fetch(url)
+        .then((r) => r.arrayBuffer())
+        .then((a) => new Promise((ok, no) => this.ctx.decodeAudioData(a, ok, no)));
+      p.catch(() => this.buffers.delete(url));
+      this.buffers.set(url, p);
+    }
+    return this.buffers.get(url);
+  }
+  _clipFor(text) {
+    const c = this.clips[this.lang];
+    if (!c || !this.ctx) return null;
+    const n = clipName(speechText(text));
+    return c.names.has(n) ? c.base + n : null;
+  }
   setLang(code) {
     this.lang = code;
     this._pick();
+    this._prefetch();
   }
   _pick() {
+    const hasClips = !!this.clips[this.lang];
     if (!this.ok) {
       this.voice = null;
-      this.available = false;
+      this.available = hasClips;
       return;
     }
     const vs = speechSynthesis.getVoices();
@@ -966,14 +1022,42 @@ export class Voice {
     const prefer = nb ? /nora|pernille|iselin|finn|female/i : /samantha|google us english|zira|aria|jenny|female/i;
     this.voice = pool.find((v) => prefer.test(v.name)) || (!nb && pool.find((v) => /en[-_]gb/i.test(v.lang))) || pool[0] || null;
     // Some browsers list no voices but still speak English with a default voice.
-    // Norwegian is only spoken with a real Norwegian voice, never read out by an English one.
-    this.available = !!this.voice || (!nb && vs.length === 0);
+    // Norwegian is only spoken with a real Norwegian voice (or a recording), never by an English one.
+    this.available = hasClips || !!this.voice || (!nb && vs.length === 0);
   }
   say(text) {
-    if (!this.ok || !this.on || !text || !this.available) return;
+    if (!this.on || !text) return;
+    this.stop(false);
+    const url = this._clipFor(text);
+    if (url) {
+      const my = ++this.token;
+      this._buffer(url)
+        .then((buf) => {
+          if (my !== this.token || !this.on) return;
+          if (this.ctx.state === 'suspended') this.ctx.resume();
+          const s = this.ctx.createBufferSource();
+          s.buffer = buf;
+          s.connect(this.out);
+          s.onended = () => {
+            if (this.src === s) {
+              this.src = null;
+              if (this.onSpeaking) this.onSpeaking(false);
+            }
+          };
+          this.src = s;
+          s.start(this.ctx.currentTime + 0.05);
+          if (this.onSpeaking) this.onSpeaking(true);
+        })
+        .catch(() => my === this.token && this._tts(text));
+      return;
+    }
+    this._tts(text);
+  }
+  _tts(text) {
+    if (!this.ok || !this.available || (this.lang === 'nb' && !this.voice)) return;
     try {
       speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text.replace(/[*—–]/g, ', ').replace(/…/g, '.'));
+      const u = new SpeechSynthesisUtterance(speechText(text));
       if (this.voice) u.voice = this.voice;
       u.lang = this.voice ? this.voice.lang : 'en-US';
       u.rate = this.lang === 'nb' ? 0.95 : 0.92;
@@ -983,11 +1067,20 @@ export class Voice {
       speechSynthesis.speak(u);
     } catch (e) {}
   }
-  stop() {
-    if (!this.ok) return;
-    try {
-      speechSynthesis.cancel();
-    } catch (e) {}
-    if (this.onSpeaking) this.onSpeaking(false);
+  stop(notify = true) {
+    this.token++;
+    if (this.src) {
+      try {
+        this.src.onended = null;
+        this.src.stop();
+      } catch (e) {}
+      this.src = null;
+    }
+    if (this.ok) {
+      try {
+        speechSynthesis.cancel();
+      } catch (e) {}
+    }
+    if (notify && this.onSpeaking) this.onSpeaking(false);
   }
 }

@@ -58,7 +58,7 @@ The site is the `docs/` folder. It's already built, so you don't need to run any
 
 ## Using it
 
-- **On the Quest:** open `https://fly.widr.one` in the Meta Quest Browser, enter the child's name (optional), then press **Enter VR**.
+- **On the Quest:** open `https://fly.widr.one` in the Meta Quest Browser, then press **Enter VR**.
   It's worth bookmarking.
 - **Preview on a phone or computer:** press *Preview on this screen*. Drag to look around and tap the buttons.
 - Sit on a normal chair, not a swivel chair. Hold the **Meta button** on the right controller to re-centre.
@@ -120,10 +120,15 @@ All the words are in `src/i18n.js`, one block per language. Each block has:
 - `board`: the departure board in the terminal
 - `page`: the start page and grown-up tips
 
-`{N}` is replaced by ", Oskar" (or whatever name you type in).
-
 - **Changing a line:** edit it in `src/i18n.js`, then run `npm run build`.
 - **Adding a language (e.g. Nynorsk):** copy the `nb` block, translate it, and add a button next to English/Norsk in `template.html`. Then let `setLanguage` and the voice picker in `src/audio.js` know its language code.
+
+### Norwegian voice recordings
+
+The Quest browser has no Norwegian text-to-speech voice, so Nimbus's Norwegian lines are pre-recorded MP3s in `docs/voice/nb/` (made with the Kibbu TTS server, then trimmed and loudness-matched with ffmpeg). Each file is named by a short hash of the exact words (`src/voiceclips.js`), and `index.json` lists them. When a line has no recording, for example after you edit the text, the browser's own voice is used for that line if it has one.
+
+- `node tools/voice-lines.mjs nb` lists every spoken line and the file name it needs.
+- Make the missing ones, put them in `docs/voice/nb/`, add them to `index.json`, and redeploy.
 - **Read-aloud:** this uses the device's built-in voices. Norwegian is only read aloud if the device has a Norwegian voice. It's never read by an English voice. If there's no Norwegian voice, the start page says so and the words are shown on screen only.
   Desktops usually have one (e.g. "Nora" on Mac). The Quest Browser may not.
 
@@ -159,7 +164,6 @@ Commit the updated `docs/` folder and GitHub Pages republishes within a minute o
 ## Privacy
 
 There are no accounts, cookies, analytics or third-party requests. The fonts are self-hosted.
-The child's name is kept only in the open page and is never stored or sent anywhere.
 Read-aloud uses the browser's text-to-speech and prefers voices that run on the device.
 Some browsers only offer online voices, which send the spoken text to the browser maker.
 Untick *Read the words out loud* to avoid that.
