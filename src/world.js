@@ -1223,30 +1223,32 @@ export function buildTerminal() {
       g.add(leaf);
     }
   }
-  // departure board
-  const boardTex = canvasTex(1024, 512, (ctx, W, H) => {
+  // departure board (redrawn when the language changes)
+  const boardTex = canvasTex(1024, 512, () => {});
+  const drawBoard = ({ title, rows }) => {
+    const ctx = boardTex.image.getContext('2d');
+    const W = 1024, H = 512;
     ctx.fillStyle = '#10151f';
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#ffd34d';
     ctx.font = '800 64px Nunito, Arial';
     ctx.textBaseline = 'top';
-    ctx.fillText('DEPARTURES', 50, 40);
-    ctx.font = '700 46px Nunito, Arial';
-    const rows = [
-      ['10:15', 'Practice Flight', 'Gate 7', 'Boarding'],
-      ['10:40', 'Sunny Island', 'Gate 9', 'On time'],
-      ['11:05', 'Snowy Mountains', 'Gate 3', 'On time'],
-    ];
+    ctx.fillText(title, 50, 40);
     rows.forEach((r, i) => {
       const y = 150 + i * 105;
+      ctx.font = '700 46px Nunito, Arial';
       ctx.fillStyle = '#ffffff';
       ctx.fillText(r[0], 50, y);
+      let fs = 46;
+      while (ctx.measureText(r[1]).width > 420 && fs > 30) ctx.font = `700 ${(fs -= 2)}px Nunito, Arial`;
       ctx.fillText(r[1], 200, y);
+      ctx.font = '700 46px Nunito, Arial';
       ctx.fillText(r[2], 650, y);
       ctx.fillStyle = i === 0 ? '#5cf08a' : '#9fd0ff';
       ctx.fillText(r[3], 820, y);
     });
-  });
+    boardTex.needsUpdate = true;
+  };
   const board = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.3), new THREE.MeshBasicMaterial({ map: boardTex, fog: false, toneMapped: false }));
   board.rotation.y = -Math.PI / 2;
   board.position.set(8.95, 1.2, 0.8);
@@ -1322,9 +1324,12 @@ export function buildTerminal() {
   g.add(cl);
 
   let tt = 0;
+  const jet = { on: false, pos: other.group.position };
   return {
     group: g,
     plane,
+    jet,
+    setBoard: drawBoard,
     update(dt) {
       tt += dt;
       // baggage train loop
@@ -1340,6 +1345,7 @@ export function buildTerminal() {
       other.group.rotation.set(0, -Math.PI / 2, 0);
       other.group.rotateX(lift > 0 ? 0.14 : 0);
       other.group.visible = x < 3000;
+      jet.on = s > 0 && x < 2600;
     },
   };
 }

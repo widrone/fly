@@ -103,6 +103,7 @@ export class Panel {
     this.rects = [];
     this.hover = -1;
     this.content = null;
+    this.labels = { start: 'Start', landed: 'Landed', brk: 'Break', badge: ['BRAVE', 'FLYER'] };
   }
 
   set(content) {
@@ -152,16 +153,16 @@ export class Panel {
 
     // Journey progress
     if (typeof c.progress === 'number') {
-      const x0 = pad + 70 * S;
-      const x1 = W - pad - 70 * S;
+      const x0 = pad + 86 * S;
+      const x1 = W - pad - 116 * S;
       const py = y + 14 * S;
       ctx.font = `700 ${24 * S}px ${FONT}`;
       ctx.fillStyle = '#7a88aa';
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
-      ctx.fillText('Start', pad, py);
+      ctx.fillText(this.labels.start, pad, py);
       ctx.textAlign = 'right';
-      ctx.fillText('Landed', W - pad, py);
+      ctx.fillText(this.labels.landed, W - pad, py);
       ctx.setLineDash([8 * S, 10 * S]);
       ctx.strokeStyle = '#b8c6e8';
       ctx.lineWidth = 5 * S;
@@ -184,7 +185,38 @@ export class Panel {
     const bh = 92 * S;
     const by = H - pad - bh + 8 * S;
     const hasCalm = c.calm !== false && this.interactive;
-    let textBottom = this.interactive && (btns.length || hasCalm) ? by - 24 * S : H - pad;
+    const gap = 22 * S;
+    const minFs = 30 * S;
+    const measure = (list, fs) => {
+      ctx.font = `800 ${fs}px ${FONT}`;
+      const w = list.map((b) => ctx.measureText(b.label).width + 64 * S);
+      return { w, tot: w.reduce((a, b) => a + b, 0) + gap * Math.max(0, list.length - 1) };
+    };
+    const fit = (list, room) => {
+      let fs = 38 * S;
+      let m = measure(list, fs);
+      while (m.tot > room && fs > minFs) m = measure(list, (fs -= 2 * S));
+      return { fs, m, ok: m.tot <= room };
+    };
+    const leftLimit = hasCalm ? pad + 228 * S : pad;
+    let rowsOut = [];
+    if (btns.length) {
+      const one = fit(btns, W - pad - leftLimit);
+      if (one.ok || btns.length === 1) rowsOut = [{ list: btns, idx0: 0, y: by, ...one }];
+      else {
+        // the last (main) button stays beside Break; the others get their own row above
+        const top = btns.slice(0, -1);
+        const f1 = fit(top, W - 2 * pad);
+        const f2 = fit(btns.slice(-1), W - pad - leftLimit);
+        const fs = Math.min(f1.fs, f2.fs);
+        rowsOut = [
+          { list: top, idx0: 0, y: by - bh - 18 * S, fs, m: measure(top, fs) },
+          { list: btns.slice(-1), idx0: btns.length - 1, y: by, fs, m: measure(btns.slice(-1), fs) },
+        ];
+      }
+    }
+    const topY = rowsOut.length ? rowsOut[0].y : by;
+    let textBottom = this.interactive && (btns.length || hasCalm) ? topY - 24 * S : H - pad;
 
     // Badge
     if (c.badge) {
@@ -197,11 +229,17 @@ export class Panel {
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#8a5a00';
-      ctx.font = `800 ${24 * S}px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('BRAVE', bx, bcy - 2 * S);
-      ctx.fillText('FLYER', bx, bcy + 24 * S);
+      this.labels.badge.forEach((word, k) => {
+        let fsz = 24 * S;
+        ctx.font = `800 ${fsz}px ${FONT}`;
+        while (ctx.measureText(word).width > 92 * S && fsz > 12 * S) {
+          fsz -= 1 * S;
+          ctx.font = `800 ${fsz}px ${FONT}`;
+        }
+        ctx.fillText(word, bx, bcy - 2 * S + k * 26 * S);
+      });
     }
     const textRight = c.badge ? W - pad - 230 * S : W - pad;
 
@@ -267,7 +305,7 @@ export class Panel {
 
     // Calm button (bottom-left)
     if (hasCalm) {
-      const r = { x: pad - 8 * S, y: by, w: 196 * S, h: bh, action: 'calm' };
+      const r = { x: pad - 8 * S, y: by, w: 214 * S, h: bh, action: 'calm' };
       const i = this.rects.length;
       this.rects.push(r);
       const hov = this.hover === i;
@@ -282,27 +320,25 @@ export class Panel {
       ctx.font = `800 ${34 * S}px ${FONT}`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText('Break', r.x + 100 * S, r.y + bh / 2 + 2 * S);
+      let bf = 34 * S;
+      ctx.font = `800 ${bf}px ${FONT}`;
+      while (ctx.measureText(this.labels.brk).width > r.w - 106 * S && bf > 24 * S) {
+        bf -= 1 * S;
+        ctx.font = `800 ${bf}px ${FONT}`;
+      }
+      ctx.fillText(this.labels.brk, r.x + 100 * S, r.y + bh / 2 + 2 * S);
     }
 
-    // Action buttons (right-aligned)
-    if (btns.length) {
-      let fs = 38 * S;
-      const gap = 22 * S;
-      const leftLimit = hasCalm ? pad + 210 * S : pad;
-      let widths;
-      for (;;) {
-        ctx.font = `800 ${fs}px ${FONT}`;
-        widths = btns.map((b) => ctx.measureText(b.label).width + 64 * S);
-        const tot = widths.reduce((a, b) => a + b, 0) + gap * (btns.length - 1);
-        if (tot <= W - pad - leftLimit || fs < 22 * S) break;
-        fs -= 2 * S;
-      }
+    // Action buttons (right-aligned, in one or two rows)
+    for (const row of rowsOut) {
+      const { fs, m } = row;
       let x = W - pad + 8 * S;
-      for (let k = btns.length - 1; k >= 0; k--) {
+      for (let j = row.list.length - 1; j >= 0; j--) {
+        const k = row.idx0 + j;
         const b = btns[k];
-        x -= widths[k];
-        const r = { x, y: by, w: widths[k], h: bh, action: b.action };
+        const bw = m.w[j];
+        x -= bw;
+        const r = { x, y: row.y, w: bw, h: bh, action: b.action };
         const i = this.rects.length;
         this.rects.push(r);
         const hov = this.hover === i;
@@ -312,22 +348,20 @@ export class Panel {
         if (primary || active) {
           ctx.fillStyle = hov ? '#6b92ff' : active ? '#ff9f43' : BLUE;
           ctx.fill();
-          ctx.fillStyle = '#fff';
         } else {
           ctx.fillStyle = hov ? '#e3ecff' : '#ffffff';
           ctx.fill();
           ctx.lineWidth = 4 * S;
           ctx.strokeStyle = '#9fb6f0';
           ctx.stroke();
-          ctx.fillStyle = NAVY;
         }
         if (hov) {
           ctx.lineWidth = 6 * S;
           ctx.strokeStyle = 'rgba(74,120,240,0.6)';
           rr(ctx, r.x - 4 * S, r.y - 4 * S, r.w + 8 * S, r.h + 8 * S, bh / 2 + 4 * S);
           ctx.stroke();
-          ctx.fillStyle = primary || active ? '#fff' : NAVY;
         }
+        ctx.fillStyle = primary || active ? '#fff' : NAVY;
         ctx.font = `800 ${fs}px ${FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';

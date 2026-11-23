@@ -5,6 +5,8 @@ It runs in the **Meta Quest Browser** (WebXR), so you don't need an app store, d
 
 **Live:** https://fly.widr.one
 
+It's in **English** and **Norwegian (Bokmål)**. The start page picks Norsk automatically on a Norwegian device and remembers the choice. You can also switch with the English / Norsk buttons at the top.
+
 Nimbus, a friendly cloud, takes the child through:
 Cloud Lounge (cloud breathing) → airport window → window seat and seatbelt → taxi → takeoff → through the clouds → cruising → turbulence they control → landing → Brave Flyer badge.
 
@@ -69,6 +71,64 @@ This is a familiarisation tool, not therapy. If the fear is strong or comes with
 
 ---
 
+## Sound and rumble (Woojer)
+
+All sound is generated in code (`src/audio.js`). It's placed in 3D around the listener and follows head movement, so with headphones:
+- the engines stay outside the window
+- the wheels stay under the floor
+- the chimes stay overhead
+- people chat around you
+
+| Moment | What you hear | What the Woojer does |
+|---|---|---|
+| Boarding | cabin air, the APU in the tail, chatter, seatbelt clicks, bins closing, bags thumping into the hold below | small thumps from the hold |
+| Door and engine start | heavy door thunk, a starter whine rising, then a soft "whoomp" as each engine lights, one after the other | a thunk, then a swell per engine |
+| Taxi | the "ba-dum" of runway joints, flap motor whirring | a ba-dum for each joint |
+| Takeoff | engines spool up, roar and fan buzz, airflow rising with speed | the rumble builds with speed, then goes quiet at lift-off (smooth!) |
+| Wheels up | hydraulic pump whine, doors open, wind roar, rattle, a big **clunk**, doors shut (the engines dip a little so you can hear it) | a hit at each door and a strong clunk |
+| Cruise | steady airflow, galley clinks, call bells | nothing; cruise feels smooth |
+| Turbulence | a thud for each bump, creaks, rattling bins, the cup clinking | a jolt for each bump, in step with the view, the wing and the water |
+| Wheels down | hydraulics, doors, a roar of wind that **stays** while the wheels hang out, two clunks | door hit, two clunks, light buffeting |
+| Touchdown | thump and tyre chirp, spoilers, the nose wheel, reverse-thrust roar, rolling | a big hit, the nose wheel, the runway rolling |
+| Cloud Lounge | warm pad, soft breeze, wind chimes around you, the breathing tone | a gentle swell with each breath |
+
+**How the rumble works:** the Woojer turns the low end of the audio into vibration (roughly 1–250 Hz).
+The app keeps a separate rumble layer around 30–55 Hz. You feel that more than you hear it, so it doesn't make the headphones boom.
+It has its own level (*Rumble* on the start page: Off / Gentle / Medium / Strong) and its own dynamics, so a big jolt never squashes what you hear.
+The Quest controllers also give a short buzz on the clunks, bumps and touchdown, scaled by the same setting.
+
+**Setup:** run a 3.5 mm cable from the Quest's headphone jack to the Woojer's input, and plug headphones into the Woojer.
+Bluetooth adds a delay, so the rumble would lag behind the picture.
+The Quest's speakers switch off when the jack is in use. Press **Test** on the start page to check the strap before the headset goes on.
+
+**Tuning:** in `src/audio.js`:
+- `update()` sets the continuous levels (the `r(L.…)` lines are what you hear, the `r(H.…)` lines are what you feel).
+- `feel(amount, …)` calls inside each event set how hard that event hits.
+- `gearUp()`, `gearDown()` and `touchdown()` hold the wheel and landing sequences.
+- `_spotlight(delay, duration, depth)` sets how much the background dips under a big moment.
+
+---
+
+## Languages
+
+All the words are in `src/i18n.js`, one block per language. Each block has:
+- `steps`: what Nimbus says at each step
+- `cap`: the running commentary during taxi, takeoff and landing
+- `btn`: the button labels
+- `breath`: the breathing exercise
+- `ui`: the panel labels and the badge
+- `board`: the departure board in the terminal
+- `page`: the start page and grown-up tips
+
+`{N}` is replaced by ", Oskar" (or whatever name you type in).
+
+- **Changing a line:** edit it in `src/i18n.js`, then run `npm run build`.
+- **Adding a language (e.g. Nynorsk):** copy the `nb` block, translate it, and add a button next to English/Norsk in `template.html`. Then let `setLanguage` and the voice picker in `src/audio.js` know its language code.
+- **Read-aloud:** this uses the device's built-in voices. Norwegian is only read aloud if the device has a Norwegian voice. It's never read by an English voice. If there's no Norwegian voice, the start page says so and the words are shown on screen only.
+  Desktops usually have one (e.g. "Nora" on Mac). The Quest Browser may not.
+
+---
+
 ## Changing it
 
 ```sh
@@ -80,14 +140,13 @@ Commit the updated `docs/` folder and GitHub Pages republishes within a minute o
 
 | File | What's in it |
 |------|--------------|
-| `src/main.js` | The story: all of Nimbus's lines (`STEPS`), the takeoff, taxi and landing timelines (`startSeq`), scene setups, input and the start page logic |
+| `src/i18n.js` | All the words, in English and Norwegian |
+| `src/main.js` | The story's structure (`STEPS`), the taxi, takeoff and landing timelines (`startSeq`), scene setups, input and the start page logic |
 | `src/world.js` | Everything 3D: cabin, airliner, wing with moving flaps and spoilers, airport, terrain, clouds, Cloud Lounge, Nimbus |
 | `src/ui.js` | The in-VR text panels and buttons (drawn on a canvas) |
-| `src/audio.js` | Synthesized sounds (engines, chimes, seatbelt click, bumps) and read-aloud |
+| `src/audio.js` | The sound engine: 3D ambience, events, the Woojer rumble layer, read-aloud |
 | `template.html` | The start page and grown-up tips. The built app is inlined into it |
 | `docs/` | The published site: `index.html`, `CNAME`, `.nojekyll`, fonts, favicon, link-preview image |
-
-**Translating:** all the child-facing text is in `STEPS` and in the `cap(...)` calls inside `startSeq` in `src/main.js`. The start page text is in `template.html`.
 
 **Debugging:** add `?debug` to the address to expose `window.__fly` (e.g. `__fly.go('takeoff0')`).
 

@@ -3,6 +3,7 @@ import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.
 import { Sound, Voice } from './audio.js';
 import { Panel } from './ui.js';
 import * as W from './world.js';
+import { LANGS, pickLanguage } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -15,6 +16,8 @@ const smooth = (t) => {
 const sound = new Sound();
 const voice = new Voice();
 let NAME = '';
+let LANG = pickLanguage();
+let L = LANGS[LANG];
 
 // ------------------------------------------------------------ renderer & scene
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -102,6 +105,7 @@ const baseFog = { color: new THREE.Color(), near: 400, far: 7000 };
 
 function showScene(name) {
   sceneName = name;
+  sound.setScene(name);
   lounge.group.visible = name === 'lounge';
   terminal.group.visible = name === 'terminal';
   cabinRoot.visible = outside.group.visible = name === 'cabin';
@@ -152,19 +156,27 @@ const F = {
   spoil: 0,
   spoilT: 0,
   gear: 1,
-  bump: 0,
   bumpLevel: 0,
+  bumpY: 0,
+  rough: 0,
   sign: false,
   manual: false,
   target: { alt: 0, v: 0 },
   sinceThump: 0,
+  nL: 0, // engine spool (0 = off, 1 = running)
+  nR: 0,
+  nLT: 0,
+  nRT: 0,
+  apu: 0,
+  apuT: 0,
+  life: 0, // how busy the cabin sounds
 };
 
 const SETUPS = {
   lounge: { scene: 'lounge' },
   terminal: { scene: 'terminal' },
-  gate: { scene: 'cabin', outside: 'gate', alt: 0, v: 0, engine: 0, flaps: 0, belt: false, sign: false },
-  gateBelt: { scene: 'cabin', outside: 'gate', alt: 0, v: 0, engine: 0, flaps: 0, belt: true, sign: true },
+  gate: { scene: 'cabin', outside: 'gate', alt: 0, v: 0, engine: 0, flaps: 0, belt: false, sign: false, eng: 0, apu: 1 },
+  gateBelt: { scene: 'cabin', outside: 'gate', alt: 0, v: 0, engine: 0, flaps: 0, belt: true, sign: true, eng: 0, apu: 1 },
   runway: { scene: 'cabin', outside: 'runway', alt: 0, v: 0, rwZ0: 0, engine: 0.14, flaps: 0.45, belt: true, sign: true },
   cruise: { scene: 'cabin', outside: 'air', alt: 640, v: 65, rwZ0: 1e6, engine: 0.45, flaps: 0, gear: 0, belt: true, sign: false, tray: true },
   approach: { scene: 'cabin', outside: 'air', alt: 640, v: 65, rwZ0: 1e6, engine: 0.45, flaps: 0, gear: 0, belt: true, sign: true },
@@ -186,6 +198,8 @@ function applySetup(key, hard) {
     F.engine = S.engine;
     F.flaps = S.flaps;
     F.spoil = 0;
+    F.nL = F.nR = F.nLT = F.nRT = S.eng ?? 1;
+    F.apu = F.apuT = S.apu ?? 0;
     if (S.outside === 'gate') outside.setBridge(-0.75);
   }
   F.mode = S.outside;
@@ -196,6 +210,7 @@ function applySetup(key, hard) {
   F.spoilT = 0;
   F.gear = S.gear ?? 1;
   F.bumpLevel = 0;
+  F.life = S.outside === 'gate' ? 1 : S.outside === 'air' ? 0.6 : 0.3;
   F.sign = S.sign;
   cabin.setBelt(S.belt);
   cabin.setSign(S.sign);
@@ -208,6 +223,73 @@ function noise(t) {
   return Math.sin(t * 2.3) * 0.5 + Math.sin(t * 3.9 + 1.3) * 0.3 + Math.sin(t * 6.1 + 2.1) * 0.2;
 }
 
+// Turbulence: discrete bumps that move the view, the wing, the water, the sound and the rumble together.
+const bumps = { list: [], next: 0.4 };
+function updateBumps(dt) {
+  const lvl = F.bumpLevel;
+  F.rough += ([0, 0.35, 0.8][lvl] - F.rough) * Math.min(1, dt * 1.5);
+  if (lvl > 0) {
+    bumps.next -= dt;
+    if (bumps.next <= 0) {
+      const amp = (lvl === 1 ? 0.32 : 0.72) * (0.6 + Math.random() * 0.6);
+      bumps.list.push({ t: 0, amp, f: 0.8 + Math.random() * 0.6, s: Math.random() < 0.5 ? -1 : 1 });
+      sound.bump(amp);
+      buzz(amp * 0.7, 90 + amp * 120);
+      bumps.next = (lvl === 1 ? 1.9 : 1.05) * (0.55 + Math.random() * 0.9);
+    }
+  }
+  let y = 0;
+  for (let i = bumps.list.length - 1; i >= 0; i--) {
+    const b = bumps.list[i];
+    b.t += dt;
+    y += b.s * b.amp * Math.exp(-b.t * 2.3) * Math.sin(b.t * Math.PI * 2 * b.f + 0.25);
+    if (b.t > 3.5) bumps.list.splice(i, 1);
+  }
+  y += noise(T * 1.1) * 0.12 * F.rough;
+  const dy = (y - F.bumpY) / Math.max(dt, 1e-3);
+  F.bumpY = y;
+  return dy;
+}
+
+function setFlaps(v) {
+  const d = Math.abs(v - F.flapsT);
+  if (d > 0.01) sound.flaps(clamp(d / 0.12, 2.5, 8));
+  F.flapsT = v;
+}
+
+// Timers that belong to the current step (cleared when the step changes)
+const timers = [];
+function later(sec, fn) {
+  timers.push({ t: sec, fn });
+}
+function updateTimers(dt) {
+  for (let i = timers.length - 1; i >= 0; i--) {
+    timers[i].t -= dt;
+    if (timers[i].t <= 0) {
+      const fn = timers[i].fn;
+      timers.splice(i, 1);
+      fn();
+    }
+  }
+}
+
+function gearUp() {
+  sound.gearUp();
+  buzz(0.35, 80, 0.35);
+  later(3.6, () => {
+    F.gear = 0;
+    buzz(0.8, 160);
+  });
+  later(4.4, () => buzz(0.35, 80));
+}
+function gearDown() {
+  sound.gearDown();
+  buzz(0.4, 90, 0.6);
+  later(0.8, () => (F.gear = 1));
+  later(2.6, () => buzz(0.7, 140));
+  later(2.95, () => buzz(0.6, 120));
+}
+
 function updateFlight(dt) {
   if (!F.manual) {
     F.alt += clamp(F.target.alt - F.alt, -12 * dt, 12 * dt);
@@ -216,17 +298,21 @@ function updateFlight(dt) {
   F.engine += (F.engineT - F.engine) * Math.min(1, dt * 0.9);
   F.flaps += clamp(F.flapsT - F.flaps, -0.12 * dt, 0.12 * dt);
   F.spoil += clamp(F.spoilT - F.spoil, -1.5 * dt, 1.5 * dt);
+  F.nL += clamp(F.nLT - F.nL, -dt / 9, dt / 9);
+  F.nR += clamp(F.nRT - F.nR, -dt / 9, dt / 9);
+  F.apu += clamp(F.apuT - F.apu, -dt / 4, dt / 4);
   F.dist += F.v * dt;
   const onGround = F.alt < 0.3;
 
-  const amp = [0, 0.7, 1.8][F.bumpLevel];
-  F.bump += (amp - F.bump) * Math.min(1, dt * 1.2);
-  const n = noise(T * 1.3);
-  outside.group.position.y = -F.alt + n * F.bump;
-  const slosh = (n * 0.22 + Math.sin(T * 7) * 0.05) * (F.bump / 1.8);
-  cabin.waterPivot.rotation.x = slosh;
-  cabin.waterPivot.rotation.z = noise(T * 1.7 + 4) * 0.18 * (F.bump / 1.8);
-  cabin.cup.position.y = 0.058 + Math.abs(noise(T * 2.2)) * 0.003 * (F.bump / 1.8);
+  const dy = updateBumps(dt);
+  outside.group.position.y = -F.alt + F.bumpY * 1.7;
+  cabinRoot.position.y = F.bumpY * 0.004; // a tiny jolt, in step with the rumble
+  cabin.waterPivot.rotation.x = clamp(dy * 0.05, -0.35, 0.35) + Math.sin(T * 7) * 0.03 * F.rough;
+  cabin.waterPivot.rotation.z = noise(T * 1.7 + 4) * 0.15 * F.rough;
+  cabin.cup.position.y = 0.058 + Math.max(0, F.bumpY) * 0.004;
+  const flex = F.bumpY * 0.022 + Math.sin(T * 0.9) * 0.0015 * (onGround ? 0 : 1);
+  plane.wings[0].group.rotation.z = -0.075 - flex;
+  plane.wings[1].group.rotation.z = 0.075 + flex;
 
   outside.groundTex.offset.y = (F.dist / outside.TILE) % 1;
   outside.ground.visible = F.mode !== 'gate';
@@ -263,24 +349,28 @@ function updateFlight(dt) {
 
   if (onGround && F.v > 0.5) {
     F.sinceThump += F.v * dt;
-    if (F.sinceThump > 24) {
+    if (F.sinceThump > 30) {
       F.sinceThump = 0;
-      sound.softThump(clamp(F.v / 50, 0.15, 0.8));
+      sound.joint(F.v);
     }
   }
-  if (F.bumpLevel > 0 && Math.random() < dt * F.bumpLevel * 1.4) sound.rattle();
+}
 
-  mixTimer -= dt;
-  if (mixTimer <= 0) {
-    mixTimer = 0.12;
-    sound.setMix({
-      hum: 0.22 + 0.25 * F.engine,
-      engine: F.engine,
-      rumble: (onGround ? clamp(F.v / 45, 0, 1) * 0.5 : 0) + 0.3 * (F.bump / 1.8) + (F.gear && !onGround ? 0.12 : 0),
-      vent: 1,
-      pad: 0,
-    });
-  }
+function soundState() {
+  const inCabin = sceneName === 'cabin';
+  return {
+    scene: sceneName,
+    running,
+    n: [F.nL, F.nR],
+    thrust: F.engine,
+    v: F.v,
+    ground: F.alt < 0.3,
+    gearDown: !!F.gear,
+    rough: inCabin ? F.rough : 0,
+    apu: F.apu,
+    life: F.life * (1 - Math.min(1, F.engine * 1.2)),
+    phase: F.mode === 'gate' && !seq ? 'boarding' : F.mode === 'air' && F.alt > 500 && !seq ? 'cruise' : 'none',
+  };
 }
 
 // ------------------------------------------------------------ fades & tweens
@@ -337,12 +427,12 @@ function updateBreath(dt) {
     breath.key = key;
     if (phaseStart) {
       sound.breath(inhale, inhale ? breath.IN : breath.OUT);
-      voice.say(inhale ? 'Breathe in' : 'And slowly out');
+      voice.say(inhale ? L.breath.sayIn : L.breath.sayOut);
     }
     panel.set({
       ...breath.base,
-      big: inhale ? 'Breathe in…' : 'Breathe out…',
-      count: inhale ? `${sec} of ${breath.IN}` : `${sec} of ${breath.OUT}`,
+      big: inhale ? L.breath.in : L.breath.out,
+      count: `${sec} ${L.breath.of} ${inhale ? breath.IN : breath.OUT}`,
       dots: [k, breath.total],
     });
   }
@@ -350,46 +440,46 @@ function updateBreath(dt) {
 
 // ------------------------------------------------------------ the story
 const N = (s) => s.replace('{N}', NAME ? `, ${NAME}` : '');
+// The story. The words for each step live in i18n.js under steps.<id>; buttons are [label key, action, style].
 const STEPS = [
-  { id: 'welcome', setup: 'lounge', calm: false, title: "Hi{N}! I'm Nimbus.", text: "I'm a little cloud, and I've been flying next to airplanes my whole life. Today we're going on a practice flight — together!", buttons: [['Hi Nimbus!', 'next']] },
-  { id: 'boss', setup: 'lounge', highlightCalm: true, title: "You're the boss", text: "Nothing happens until you press a button. If you ever want a break, press the Break button in the corner, and we'll float right back here. Try it whenever you like!", buttons: [['Got it', 'next']] },
-  { id: 'breathe', setup: 'lounge', calm: false, title: 'Cloud breathing', text: "Here's my favourite trick for wobbly feelings. Breathe in through your nose while I puff up big… then blow out slowly while I shrink. Let's do it three times.", buttons: [["Let's breathe", 'breathe3']] },
-  { id: 'breathed', setup: 'lounge', calm: false, title: 'Great breathing!', text: 'You can do cloud breathing anytime: at the airport, on the plane, even right now. Ready to visit the airport?', buttons: [['Again', 'breathe3', 'secondary'], ['Go to the airport', 'next']] },
+  { id: 'welcome', setup: 'lounge', calm: false, buttons: [['hiNimbus', 'next']] },
+  { id: 'boss', setup: 'lounge', highlightCalm: true, buttons: [['gotIt', 'next']] },
+  { id: 'breathe', setup: 'lounge', calm: false, buttons: [['breathe', 'breathe3']] },
+  { id: 'breathed', setup: 'lounge', calm: false, buttons: [['again', 'breathe3', 'secondary'], ['toAirport', 'next']] },
 
-  { id: 'gate1', setup: 'terminal', progress: 0.04, title: "That's our plane!", text: "It's as long as about nine cars parked in a row. See the wings? They are built to bend a little, like a bird's. That makes them strong." },
-  { id: 'gate2', setup: 'terminal', progress: 0.06, title: 'Checked every time', text: 'Before every flight, the pilots walk all the way around the plane to check it. Engineers look after it too, a bit like a check-up at the doctor, every single day.' },
-  { id: 'gate3', setup: 'terminal', progress: 0.08, title: 'Two super-trained pilots', text: 'Pilots study for years and practise in special simulators. There are always two of them in the cockpit, so they can help each other.' },
-  { id: 'gate4', setup: 'terminal', progress: 0.1, title: 'One of the safest ways to travel', text: 'Flying is much safer than riding in a car. Planes have backup systems too: if one part needs help, another one takes over.', buttons: [["Let's board!", 'next']] },
+  { id: 'gate1', setup: 'terminal', progress: 0.04 },
+  { id: 'gate2', setup: 'terminal', progress: 0.06 },
+  { id: 'gate3', setup: 'terminal', progress: 0.08 },
+  { id: 'gate4', setup: 'terminal', progress: 0.1, buttons: [['board', 'next']] },
 
-  { id: 'seat1', setup: 'gate', progress: 0.13, title: 'Your window seat!', text: "Look to your left, out of the window. That big wing is what holds us up in the air, like a giant kite. Nimbus Air gave you a seat with extra room for your legs!" },
-  { id: 'seat2', setup: 'gate', progress: 0.15, title: 'Buckle up', text: "Let's click your seatbelt, just like in a car. Press the button, then look down at your lap.", buttons: [['Click seatbelt', 'buckle']] },
-  { id: 'seat3', setup: 'gateBelt', progress: 0.17, title: 'Click! Nice and snug.', text: "Did you hear the ding? That's the seatbelt sign lighting up above you. Dings are how the crew talk to each other. They're a normal part of every flight.", onEnter: () => sound.ding() },
-  { id: 'seat4', setup: 'gateBelt', progress: 0.19, title: 'Plane sounds', text: 'Planes make lots of sounds: air whooshing from the vents, beeps, thumps from bags being loaded, the door closing. They are just the sounds of a plane getting ready.' },
-  { id: 'taxi0', setup: 'gateBelt', progress: 0.21, title: 'Off to the runway', text: "Soon the door closes and the plane drives slowly to the runway. That's called taxiing. You'll feel little bumps, like a bus on a road.", buttons: [['Start taxiing', 'next']] },
+  { id: 'seat1', setup: 'gate', progress: 0.13 },
+  { id: 'seat2', setup: 'gate', progress: 0.15, buttons: [['buckle', 'buckle']] },
+  { id: 'seat3', setup: 'gateBelt', progress: 0.17, onEnter: () => sound.ding() },
+  { id: 'seat4', setup: 'gateBelt', progress: 0.19 },
+  { id: 'taxi0', setup: 'gateBelt', progress: 0.21, buttons: [['taxi', 'next']] },
   { id: 'taxi', setup: 'gateBelt', progress: 0.24, seq: 'taxi', resumeTo: 'taxi0' },
 
-  { id: 'takeoff0', setup: 'runway', progress: 0.28, title: 'Ready for takeoff', text: "Here's what will happen: the engines get LOUD (that means they're strong!), you get pushed back in your seat, and we go faster and faster… then whoosh, up we go!", buttons: [['Breathe first', 'calm', 'secondary'], ['Take off!', 'next']], calm: false },
+  { id: 'takeoff0', setup: 'runway', progress: 0.28, calm: false, buttons: [['breatheFirst', 'calm', 'secondary'], ['takeOff', 'next']] },
   { id: 'takeoff', setup: 'runway', progress: 0.36, seq: 'takeoff', resumeTo: 'takeoff0' },
 
-  { id: 'cruise1', setup: 'cruise', progress: 0.5, title: 'Cruising', text: 'Up here the plane flies smooth and steady. People read, play games, eat snacks and even sleep. Your tray table is out, and there is a drink for you!' },
-  { id: 'cruise2', setup: 'cruise', progress: 0.55, title: 'Pop your ears', text: 'When the plane goes up or down, your ears might feel full. Swallow, yawn or chew something, and pop! They feel better.' },
-  { id: 'bumps1', setup: 'cruise', progress: 0.6, title: 'Bumpy air', text: "Sometimes the air is bumpy, like waves on the sea or a gravel road. It's called turbulence. It can feel funny, but planes are built for much, much bigger bumps than you will ever feel." },
-  { id: 'bumps2', setup: 'cruise', progress: 0.64, bumps: true, title: 'Try some bumps?', text: 'You choose how bumpy! Watch the water in your cup wiggle. Bumps feel funny, but they are not dangerous.' },
-  { id: 'bumps3', setup: 'cruise', progress: 0.68, title: 'When it gets bumpy', text: 'Keep your seatbelt on, sit back and do cloud breathing. Squeeze something soft, or hold a grown-up’s hand. The bumps always stop again.' },
+  { id: 'cruise1', setup: 'cruise', progress: 0.5 },
+  { id: 'cruise2', setup: 'cruise', progress: 0.55 },
+  { id: 'bumps1', setup: 'cruise', progress: 0.6 },
+  { id: 'bumps2', setup: 'cruise', progress: 0.64, bumps: true },
+  { id: 'bumps3', setup: 'cruise', progress: 0.68 },
 
-  { id: 'land0', setup: 'approach', progress: 0.74, title: 'Time to land', text: 'Tray table away, seatbelt on. The engines get quieter, we glide down through the clouds, the wheels come out with a rumble, and then bump! We are on the ground.', buttons: [['Breathe first', 'calm', 'secondary'], ["Let's land!", 'next']], calm: false },
+  { id: 'land0', setup: 'approach', progress: 0.74, calm: false, buttons: [['breatheFirst', 'calm', 'secondary'], ['land', 'next']] },
   { id: 'land', setup: 'approach', progress: 0.85, seq: 'landing', resumeTo: 'land0' },
   {
-    id: 'done', setup: 'landed', progress: 1, calm: false, badge: true, title: 'You did it{N}!',
-    text: 'You flew a whole flight: takeoff, clouds, bumps and landing! Every time you practise, it gets a little easier. I am so proud of you.',
-    buttons: [['Fly again', 'restart', 'secondary'], ['Cloud Lounge', 'free', 'secondary'], ['Finish', 'exit']],
+    id: 'done', setup: 'landed', progress: 1, calm: false, badge: true,
+    buttons: [['flyAgain', 'restart', 'secondary'], ['lounge', 'free', 'secondary'], ['finish', 'exit']],
     onEnter: () => {
       sound.celebrate();
       confetti.start(new THREE.Vector3(0.5, 0.5, -1.1), new THREE.Vector3(1.8, 0.4, 1.0));
     },
   },
-  { id: 'break', setup: 'lounge', calm: false, breathe: true, title: 'Break time', say: 'Take as long as you like. Breathe with me.', buttons: [['Back to my flight', 'resume']] },
-  { id: 'free', setup: 'lounge', calm: false, breathe: true, title: 'Cloud Lounge', say: 'Stay as long as you like.', buttons: [['Finish', 'exit', 'secondary'], ['Fly again', 'restart']] },
+  { id: 'break', setup: 'lounge', calm: false, breathe: true, buttons: [['back', 'resume']] },
+  { id: 'free', setup: 'lounge', calm: false, breathe: true, buttons: [['finish', 'exit', 'secondary'], ['flyAgain', 'restart']] },
 ];
 const byId = (id) => STEPS.findIndex((s) => s.id === id);
 let cur = -1;
@@ -397,16 +487,18 @@ let busy = false;
 let breakReturn = 'welcome';
 let seq = null;
 
+const words = (id) => L.steps[id] || {};
 function stepContent(st, extra = {}) {
-  let buttons = st.buttons || [['Next', 'next']];
+  let buttons = st.buttons || [['next', 'next']];
   if (st.bumps) {
     const st2 = (lvl) => (F.bumpLevel === lvl ? 'active' : 'secondary');
-    buttons = [['Tiny bumps', 'bump1', st2(1)], ['Little bumps', 'bump2', st2(2)], ['Smooth', 'bump0', st2(0)], ['Next', 'next']];
+    buttons = [['tiny', 'bump1', st2(1)], ['little', 'bump2', st2(2)], ['smooth', 'bump0', st2(0)], ['next', 'next']];
   }
+  const w = words(st.id);
   return {
-    title: st.title ? N(st.title) : '',
-    text: st.text ? N(st.text) : '',
-    buttons,
+    title: w.title ? N(w.title) : '',
+    text: w.text ? N(w.text) : '',
+    buttons: buttons.map(([k, a, style]) => [L.btn[k] || k, a, style]),
     calm: st.calm,
     progress: st.progress,
     badge: st.badge,
@@ -428,6 +520,8 @@ async function go(id, { instant = false } = {}) {
   breath.active = false;
   caption.mesh.visible = false;
   confetti.mesh.visible = false;
+  timers.length = 0;
+  bumps.list.length = 0;
   voice.stop();
   const S = SETUPS[st.setup];
   const needFade = !instant && S.scene !== sceneName;
@@ -442,10 +536,11 @@ async function go(id, { instant = false } = {}) {
   } else if (st.breathe) {
     const base = stepContent(st);
     startBreathing(Infinity, base, null);
-    voice.say(st.say);
+    voice.say(words(st.id).say);
   } else {
-    panel.set(stepContent(st));
-    say(N(st.title), N(st.text));
+    const c = stepContent(st);
+    panel.set(c);
+    say(c.title, c.text);
   }
   nimbus.talk();
   if (needFade) await fadeTo(0, 0.6);
@@ -472,7 +567,7 @@ function action(a) {
   if (a === 'free') return go('free');
   if (a === 'exit') return exitExperience();
   if (a === 'breathe3') {
-    startBreathing(3, { title: 'Cloud breathing', calm: false, buttons: [] }, () => go('breathed'));
+    startBreathing(3, { title: L.breath.title, calm: false, buttons: [] }, () => go('breathed'));
     return;
   }
   if (a === 'buckle') {
@@ -495,14 +590,13 @@ function action(a) {
       F.sign = false;
     }
     panel.set(stepContent(st));
-    if (lvl === 1) voice.say('Tiny bumps. Look at the water wiggle!');
-    if (lvl === 2) voice.say('Little bumps. Bumpy, but safe.');
-    if (lvl === 0) voice.say('Smooth again.');
+    voice.say(L.bumpSay[lvl]);
   }
 }
 
 // ------------------------------------------------------------ timed sequences
-function cap(title, text) {
+function cap(key) {
+  const [title, text] = L.cap[key];
   const st = STEPS[cur];
   panel.set({ title, text, buttons: [], calm: true, progress: st.progress });
   caption.set({ title, text, textSize: 44, titleSize: 64 });
@@ -519,16 +613,32 @@ function startSeq(name) {
     F.manual = true;
     at(0, () => {
       sound.door();
-      cap('Door closed', 'The tunnel to the airport rolls away from the plane.');
+      buzz(0.4, 120, 0.85);
+      cap('doorClosed');
     });
     at(5, () => {
-      F.engineT = 0.22;
-      cap('Rolling slowly', 'We drive to the runway like a big, gentle bus.');
+      sound.engineStart('R');
+      F.nRT = 1;
+      cap('engineOne');
     });
-    at(14, () => go('takeoff0'));
+    at(10.5, () => {
+      sound.engineStart('L');
+      F.nLT = 1;
+      cap('engineTwo');
+    });
+    at(16, () => {
+      F.apuT = 0;
+      F.engineT = 0.2;
+      cap('rolling');
+    });
+    at(22, () => {
+      setFlaps(0.45);
+      cap('flapsOut');
+    });
+    at(29, () => go('takeoff0'));
     s.tick = (t) => {
       outside.setBridge(lerp(-0.75, -24, smooth((t - 0.8) / 4)));
-      F.v = t > 6.5 ? Math.min(5, (t - 6.5) * 1.1) : 0;
+      F.v = t > 16.5 ? Math.min(5, (t - 16.5) * 1.1) : 0;
     };
   }
   if (name === 'takeoff') {
@@ -538,23 +648,22 @@ function startSeq(name) {
     let doneAt = Infinity;
     at(0, () => {
       F.engineT = 1;
-      cap('Here we go!', 'Hear the engines getting louder? That means they are strong.');
+      cap('hereWeGo');
     });
-    at(7, () => cap('Faster and faster', 'Feel pushed back into your seat? That is exactly what should happen.'));
-    at(16, () => cap('Lift off!', 'The wings are lifting us up into the sky. Smooth!'));
-    at(22, () => {
-      sound.clunk();
-      F.gear = 0;
-      cap('Clunk!', 'That was the wheels folding away, like a bird tucking in its feet.');
+    at(7, () => cap('faster'));
+    at(16, () => cap('liftOff'));
+    at(21, () => {
+      gearUp();
+      cap('gearUp');
     });
     at(28, () => {
       F.engineT = 0.7;
-      cap('A little quieter', 'The pilots turn the engines down a bit now. That is planned and normal.');
+      cap('quieter');
     });
-    at(31, () => (F.flapsT = 0));
-    when(() => F.alt >= W.CLOUD_ALT - 48, () => cap('Into the cloud!', 'It is just foggy air, like flying through mist.'));
+    at(31, () => setFlaps(0));
+    when(() => F.alt >= W.CLOUD_ALT - 48, () => cap('intoCloud'));
     when(() => F.alt >= W.CLOUD_ALT + 52, () => {
-      cap('Above the clouds!', 'Look at all that sunshine. You did the takeoff!');
+      cap('aboveClouds');
       doneAt = s.t + 6;
     });
     when(() => s.t > doneAt, () => go('cruise1'));
@@ -575,34 +684,38 @@ function startSeq(name) {
     at(0, () => {
       sound.ding();
       cabin.setSign(true);
-      cap('Gliding down', 'The engines get quieter as we start going down. That is normal.');
+      cap('glide');
     });
     at(8, () => {
-      F.flapsT = 0.5;
-      cap('Look at the wing!', 'Flaps slide out to make the wing bigger, so we can fly slowly and gently.');
+      setFlaps(0.5);
+      cap('flapsLand');
     });
-    when(() => F.alt < W.CLOUD_ALT + 48, () => cap('Back through the clouds', 'Foggy for a moment…'));
-    when(() => F.alt < W.CLOUD_ALT - 80, () => cap('Hello, ground!', 'Look at the fields, trees and lakes. The runway is just ahead.'));
-    at(30, () => {
-      sound.clunk();
-      F.gear = 1;
-      F.flapsT = 1;
-      cap('Rumble, rumble', 'That is the wheels coming down. Ready for landing!');
+    when(() => F.alt < W.CLOUD_ALT + 48, () => cap('backThrough'));
+    when(() => F.alt < W.CLOUD_ALT - 80, () => cap('ground'));
+    at(29, () => {
+      gearDown();
+      cap('gearDown');
     });
+    at(35, () => setFlaps(1));
     at(44, () => {
-      sound.thump(1.1);
-      controllers.forEach((c) => haptic(c, 0.45, 120));
+      sound.touchdown();
+      buzz(1, 220);
+      later(0.35, () => sound.spoilers());
+      later(1.3, () => {
+        sound.noseDown();
+        buzz(0.6, 140);
+      });
       F.spoilT = 1;
       F.engineT = 0.85;
-      cap('Bump! We are down!', 'The engines roar for a moment to help us slow down. Totally normal.');
+      cap('touchdown');
     });
     at(50, () => (F.engineT = 0.15));
     at(60, () => {
       sound.ding();
       cabin.setSign(false);
       F.spoilT = 0;
-      F.flapsT = 0;
-      cap('Welcome!', 'We landed safely.');
+      setFlaps(0);
+      cap('welcome');
     });
     at(64, () => go('done'));
     s.tick = (t, dt) => {
@@ -682,6 +795,14 @@ function haptic(c, v = 0.3, ms = 30) {
     const a = c.userData.src && c.userData.src.gamepad && c.userData.src.gamepad.hapticActuators;
     if (a && a[0] && a[0].pulse) a[0].pulse(v, ms);
   } catch (e) {}
+}
+// controller rumble, scaled by the rumble setting; delay in seconds
+function buzz(amp, ms, delay = 0) {
+  const k = sound.haptic;
+  if (k <= 0) return;
+  const fire = () => controllers.forEach((c) => haptic(c, Math.min(1, amp * (0.4 + 0.6 * k)), ms));
+  if (delay) later(delay, fire);
+  else fire();
 }
 function onSelect(c) {
   aim(c);
@@ -784,6 +905,7 @@ let xrSession = null;
 function readOptions() {
   NAME = ($('name').value || '').trim().slice(0, 20);
   voice.on = $('voice').checked;
+  sound.setHaptics(parseFloat($('rumble').value));
   return $('chapter').value;
 }
 
@@ -812,7 +934,9 @@ async function enterVR() {
     await renderer.xr.setSession(session);
     begin(chapter);
   } catch (e) {
-    $('xrmsg').textContent = 'Could not start VR here: ' + (e && e.message ? e.message : e);
+    xrState = 'fail';
+    xrDetail = e && e.message ? e.message : String(e);
+    renderXrMsg();
   }
 }
 
@@ -828,12 +952,11 @@ function stopExperience() {
   seq = null;
   breath.active = false;
   voice.stop();
-  sound.setMix({}, 0.3);
   $('hud').classList.add('hidden');
   $('start').classList.remove('hidden');
   showScene('lounge');
   panel.mesh.visible = true;
-  panel.set({ title: 'Practice Flight', text: 'See you soon!', buttons: [], calm: false });
+  panel.set({ title: L.ui.idle, text: L.ui.bye, buttons: [], calm: false });
 }
 
 function exitExperience() {
@@ -844,6 +967,50 @@ function exitExperience() {
 $('vr').addEventListener('click', enterVR);
 $('preview').addEventListener('click', preview);
 $('exit').addEventListener('click', exitExperience);
+$('rumble').addEventListener('change', () => sound.setHaptics(parseFloat($('rumble').value)));
+$('testRumble').addEventListener('click', () => {
+  sound.init();
+  sound.setHaptics(parseFloat($('rumble').value));
+  sound.testRumble();
+});
+voice.onSpeaking = (on) => sound.duck(on);
+
+let xrState = 'checking';
+let xrDetail = '';
+function renderXrMsg() {
+  $('xrmsg').textContent = L.page.xr[xrState] + (xrState === 'fail' ? xrDetail : '');
+}
+
+// ------------------------------------------------------------ language
+function setLanguage(code) {
+  if (!LANGS[code]) code = 'en';
+  LANG = code;
+  L = LANGS[code];
+  try {
+    localStorage.setItem('fly-lang', code);
+  } catch (e) {}
+  const P = L.page;
+  document.documentElement.lang = code === 'nb' ? 'nb' : 'en';
+  document.title = P.docTitle;
+  document.querySelectorAll('[data-t]').forEach((el) => (el.textContent = P[el.dataset.t]));
+  document.querySelectorAll('[data-th]').forEach((el) => (el.innerHTML = P[el.dataset.th]));
+  $('name').placeholder = P.namePh;
+  [...$('chapter').options].forEach((o, i) => (o.textContent = P.chapters[i]));
+  [...$('rumble').options].forEach((o, i) => (o.textContent = P.rumbleOpts[i]));
+  $('tips').innerHTML = P.tips.map((t) => `<li>${t}</li>`).join('');
+  document.querySelectorAll('.lang button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === code)));
+  panel.labels = caption.labels = L.ui;
+  terminal.setBoard(L.board);
+  voice.setLang(L.speech);
+  renderVoiceNote();
+  renderXrMsg();
+  if (!running) panel.set({ title: L.ui.idle, text: '', buttons: [], calm: false });
+}
+function renderVoiceNote() {
+  $('voicenote').textContent = voice.available ? '' : L.page.noVoice;
+}
+document.querySelectorAll('.lang button').forEach((b) => b.addEventListener('click', () => setLanguage(b.dataset.lang)));
+voice.onVoices = renderVoiceNote;
 
 async function checkXR() {
   const btn = $('vr');
@@ -854,19 +1021,20 @@ async function checkXR() {
   btn.disabled = !ok;
   const embedded = window.self !== window.top;
   const quest = /OculusBrowser|Quest/i.test(navigator.userAgent);
-  $('xrmsg').textContent = ok
-    ? 'Headset ready. Sit on a chair, then press Enter VR.'
-    : quest && embedded
-      ? 'VR is blocked inside this embedded preview. Open the stand-alone copy of this page (its own web address) in the Quest Browser to fly.'
-      : 'Open this page in the Meta Quest Browser to fly in VR. You can preview it here on this screen.';
+  xrState = ok ? 'ok' : quest && embedded ? 'embedded' : 'open';
+  renderXrMsg();
 }
 checkXR();
+setLanguage(LANG);
 
 // ------------------------------------------------------------ main loop
 showScene('lounge');
-panel.set({ title: 'Practice Flight', text: '', buttons: [], calm: false });
+panel.set({ title: L.ui.idle, text: '', buttons: [], calm: false });
 const clock = new THREE.Clock();
 const headPos = new THREE.Vector3();
+const headQ = new THREE.Quaternion();
+const fwdV = new THREE.Vector3();
+const upV = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   T += dt;
@@ -880,16 +1048,19 @@ function tick(dt) {
     updateSeq(dt);
     updateBreath(dt);
   }
+  if (running) updateTimers(dt);
   if (sceneName === 'cabin') updateFlight(dt);
-  else {
-    mixTimer -= dt;
-    if (mixTimer <= 0 && running) {
-      mixTimer = 0.2;
-      sound.setMix(sceneName === 'lounge' ? { pad: 0.8 } : { hum: 0.05, pad: 0.3 }, 1.0);
-    }
+  mixTimer -= dt;
+  if (mixTimer <= 0) {
+    mixTimer = 0.1;
+    sound.update(soundState(), 0.1);
   }
   if (lounge.group.visible) lounge.update(dt);
-  if (terminal.group.visible) terminal.update(dt);
+  if (terminal.group.visible) {
+    terminal.update(dt);
+    const p = terminal.jet.pos;
+    sound.setFarJet(p.x, p.y, p.z, running && terminal.jet.on);
+  }
   nimbus.update(T, dt);
   confetti.update(dt);
   if (renderer.xr.isPresenting) {
@@ -905,6 +1076,10 @@ function tick(dt) {
     headPos.set(0, 0, 0);
   }
   nimbus.group.lookAt(headPos);
+  // the listener follows the head, so sounds stay where they come from
+  const src = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  src.getWorldQuaternion(headQ);
+  sound.setListener(headPos, fwdV.set(0, 0, -1).applyQuaternion(headQ), upV.set(0, 1, 0).applyQuaternion(headQ));
   fade.position.copy(headPos);
   fade.visible = fade.material.opacity > 0.002;
 }

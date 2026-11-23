@@ -43,6 +43,14 @@
   #vr { background:var(--blue); color:#fff; flex:1 1 200px; }
   #vr:disabled { background:#b7c4e6; cursor:not-allowed; }
   #preview { background:#eef2ff; color:var(--navy); border:2px solid #c9d5f2; flex:1 1 160px; }
+  .lang { display:flex; gap:6px; justify-content:flex-end; margin:-8px -6px 6px 0; }
+  .lang button { font-size:14px; padding:6px 14px; background:#eef2ff; color:var(--navy); border:2px solid #c9d5f2; }
+  .lang button[aria-pressed="true"] { background:var(--blue); color:#fff; border-color:var(--blue); }
+  #voicenote { font-size:13px; font-weight:700; color:#9a6a00; margin:6px 0 0 32px; }
+  #voicenote:empty { display:none; }
+  .rumble { display:flex; gap:10px; }
+  .rumble select { flex:1; }
+  #testRumble { background:#eef2ff; color:var(--navy); border:2px solid #c9d5f2; font-size:16px; padding:10px 20px; }
   #xrmsg { margin-top:12px; font-size:14px; font-weight:700; color:#5b6786; }
   details { margin-top:20px; border-top:2px solid #edf1fb; padding-top:14px; }
   summary { cursor:pointer; font-weight:800; color:var(--navy); font-size:16px; }
@@ -59,6 +67,10 @@
 
 <div id="start">
   <div class="card">
+    <div class="lang" role="group" aria-label="Language / Språk">
+      <button type="button" data-lang="en" aria-pressed="true">English</button>
+      <button type="button" data-lang="nb" aria-pressed="false">Norsk</button>
+    </div>
     <div class="logo">
       <svg width="64" height="48" viewBox="0 0 64 48" aria-hidden="true">
         <circle cx="18" cy="28" r="12" fill="#cfe0ff"/><circle cx="32" cy="20" r="16" fill="#e4edff"/><circle cx="47" cy="28" r="12" fill="#cfe0ff"/>
@@ -66,14 +78,14 @@
         <circle cx="27" cy="24" r="2.4" fill="#1d2336"/><circle cx="37" cy="24" r="2.4" fill="#1d2336"/>
         <path d="M28 30 q4 4 8 0" stroke="#1d2336" stroke-width="2" fill="none" stroke-linecap="round"/>
       </svg>
-      <h1>Practice Flight<br>with Nimbus</h1>
+      <h1 data-th="title">Practice Flight<br>with Nimbus</h1>
     </div>
-    <p class="sub">A gentle, step-by-step VR flight for kids who feel nervous about flying. A friendly cloud explains every sound and bump before it happens — and nothing moves on until your child presses a button.</p>
+    <p class="sub" data-t="sub">A gentle, step-by-step VR flight for kids who feel nervous about flying. A friendly cloud explains every sound and bump before it happens — and nothing moves on until your child presses a button.</p>
 
-    <label for="name">Flyer's first name (optional)</label>
+    <label for="name" data-t="name">Flyer's first name (optional)</label>
     <input type="text" id="name" maxlength="20" placeholder="e.g. Oskar" autocomplete="off">
 
-    <label for="chapter">Start from</label>
+    <label for="chapter" data-t="chapter">Start from</label>
     <select id="chapter">
       <option value="welcome">The beginning (Cloud Lounge)</option>
       <option value="gate1">At the airport</option>
@@ -84,32 +96,47 @@
       <option value="land0">Landing</option>
     </select>
 
-    <div class="row"><input type="checkbox" id="voice" checked><label for="voice" style="margin:0">Read the words out loud</label></div>
+    <div class="row"><input type="checkbox" id="voice" checked><label for="voice" style="margin:0" data-t="voice">Read the words out loud</label></div>
+    <div id="voicenote"></div>
+
+    <label for="rumble" data-t="rumble">Rumble for a Woojer strap or vest</label>
+    <div class="rumble">
+      <select id="rumble">
+        <option value="0">Off</option>
+        <option value="0.35">Gentle</option>
+        <option value="0.65" selected>Medium</option>
+        <option value="1">Strong</option>
+      </select>
+      <button id="testRumble" type="button" data-t="test">Test</button>
+    </div>
 
     <div class="btns">
-      <button id="vr" disabled>Enter VR</button>
-      <button id="preview">Preview on this screen</button>
+      <button id="vr" disabled data-t="vr">Enter VR</button>
+      <button id="preview" data-t="preview">Preview on this screen</button>
     </div>
     <div id="xrmsg">Checking for a VR headset…</div>
 
     <details>
-      <summary>Tips for grown-ups</summary>
-      <ul>
+      <summary data-t="tipsTitle">Tips for grown-ups</summary>
+      <ul id="tips">
         <li>Let your child sit on a chair (not a swivel chair) and stay close by. The whole experience is seated — the cabin never moves, only the view outside the window.</li>
         <li>Short and often works best: one or two chapters a day in the week before the trip, ending on a calm note. A full flight takes about 15 minutes.</li>
         <li>Your child is in control. Every step waits for a button press, and the <b>Break</b> button floats them back to the Cloud Lounge to breathe. Never push them to continue.</li>
         <li>Practise cloud breathing together outside VR too, so it's ready to use on the real plane.</li>
         <li>If the view tilts or feels off, hold the Meta button on the right controller to re-centre.</li>
         <li>Point with a controller and pull the trigger — or with hand tracking, point and pinch.</li>
+        <li><b>Woojer:</b> connect it to the Quest's headphone jack with a 3.5 mm cable (Bluetooth adds a noticeable delay), and plug headphones into the Woojer — the Quest's own speakers switch off when the jack is used. Press <b>Test</b> to check it before the headset goes on.</li>
+        <li>Start on <b>Gentle</b> rumble. It is strongest at takeoff, in the bumps and at touchdown. The Woojer's own intensity buttons work too.</li>
+        <li>Headphones make the sound 3D: the engines stay outside the window and the wheels under the floor as your child turns their head.</li>
       </ul>
     </details>
-    <p class="fine">This is a familiarisation tool, not therapy. If the fear is strong, stops your child from travelling, or comes with panic attacks, a child psychologist can help — exposure-based therapy for flying is well established and some therapists use VR as part of it. Meta's guidance is that Quest headsets are for ages 10+ with a parent-managed account.</p>
+    <p class="fine" data-t="fine">This is a familiarisation tool, not therapy. If the fear is strong, stops your child from travelling, or comes with panic attacks, a child psychologist can help — exposure-based therapy for flying is well established and some therapists use VR as part of it. Meta's guidance is that Quest headsets are for ages 10+ with a parent-managed account.</p>
   </div>
 </div>
 
 <div id="hud" class="hidden">
-  <button id="exit">← Exit</button>
-  <span>Drag to look around · tap the buttons</span>
+  <button id="exit" data-t="exit">← Exit</button>
+  <span data-t="hint">Drag to look around · tap the buttons</span>
 </div>
 
 <script>/*__BUNDLE__*/</script>
