@@ -3,6 +3,8 @@ import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.
 import { Sound, Voice } from './audio.js';
 import { Panel } from './ui.js';
 import * as W from './world.js';
+import { buildCabin } from './cabin.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { LANGS, pickLanguage } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
@@ -26,6 +28,8 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local');
 if (renderer.xr.setFoveation) renderer.xr.setFoveation(1);
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 0.97;
 $('stage').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -41,12 +45,15 @@ const sun = new THREE.DirectionalLight('#fff3e0', 2.2);
 scene.add(sun);
 scene.add(sun.target);
 scene.fog = new THREE.Fog('#cfe6ff', 400, 7000);
+// soft indoor reflections, given only to the cabin's physically based materials
+// (scene.environment would also wash out the simpler materials outside)
+const cabinEnv = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
 
 const lounge = W.buildLounge();
 scene.add(lounge.group);
 const terminal = W.buildTerminal();
 scene.add(terminal.group);
-const cabin = W.buildCabin();
+const cabin = buildCabin(cabinEnv);
 const plane = W.makeAirliner({ withGear: false });
 plane.group.position.set(W.CX, W.FUSE_Y, -2);
 const cabinRoot = new THREE.Group();
@@ -61,7 +68,7 @@ scene.add(confetti.mesh);
 
 const panel = new Panel(1.0, 0.64, { renderer });
 scene.add(panel.mesh);
-const caption = new Panel(1.0, 0.36, { px: 720, interactive: false, renderer });
+const caption = new Panel(1.0, 0.36, { px: 1024, interactive: false, renderer });
 caption.mesh.visible = false;
 scene.add(caption.mesh);
 
@@ -86,16 +93,16 @@ const PRESETS = {
   terminal: {
     sky: DAY,
     fog: ['#cde4fb', 500, 8000],
-    hemi: ['#e3f0ff', '#aab3bc', 1.35],
-    sun: ['#fff3e0', 2.1],
+    hemi: ['#e3f0ff', '#aab3bc', 1.1],
+    sun: ['#fff3e0', 1.75],
     panel: [[0.42, -0.14, -1.15], 0.78],
     nimbus: [[0.86, 0.22, -1.12], 0.85],
   },
   cabin: {
     sky: DAY,
     fog: ['#cde4fb', 450, 7500],
-    hemi: ['#e3f0ff', '#aab3bc', 1.35],
-    sun: ['#fff3e0', 2.2],
+    hemi: ['#eef3fa', '#a9b1ba', 1.15],
+    sun: ['#fff1dc', 1.95],
     panel: [[0.12, 0.08, -0.85], 0.62],
     nimbus: [[0.6, 0.24, -0.95], 0.7],
   },
@@ -136,8 +143,9 @@ function showScene(name) {
   const [np, ns] = P.nimbus;
   nimbus.group.position.set(...np);
   nimbus.group.scale.setScalar(ns);
-  caption.mesh.position.set(-0.26, 0.24, -0.2);
-  caption.mesh.scale.setScalar(0.36);
+  // the commentary sign floats outside, just above the left engine, framed by the window
+  caption.mesh.position.set(-5.5, -0.72, -1.5);
+  caption.mesh.scale.setScalar(2.1);
   caption.mesh.lookAt(0, 0, 0);
 }
 
@@ -339,7 +347,8 @@ function updateFlight(dt) {
   scene.fog.far = lerp(baseFog.far, 26, Math.pow(c, 0.5));
   scene.fog.color.copy(baseFog.color).lerp(new THREE.Color('#eef2f6'), c);
   sky.uniforms.white.value = c;
-  hemi.intensity = lerp(1.35, 1.0, c);
+  cabin.setSun(1 - c);
+  hemi.intensity = lerp(1.15, 0.9, c);
 
   plane.wings.forEach((w) => {
     w.setFlaps(F.flaps);

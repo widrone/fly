@@ -142,7 +142,8 @@ Commit the updated `docs/` folder and GitHub Pages republishes within a minute o
 |------|--------------|
 | `src/i18n.js` | All the words, in English and Norwegian |
 | `src/main.js` | The story's structure (`STEPS`), the taxi, takeoff and landing timelines (`startSeq`), scene setups, input and the start page logic |
-| `src/world.js` | Everything 3D: cabin, airliner, wing with moving flaps and spoilers, airport, terrain, clouds, Cloud Lounge, Nimbus |
+| `src/cabin.js` | The cabin interior: curved sidewalls, deep window reveals with glass and shades, seats, bins with service units and row numbers, ceiling, floor, shadows and sunlight patches (all textures generated in code) |
+| `src/world.js` | The rest of the 3D world: airliner, wing with moving flaps and spoilers, airport, terrain, clouds, terminal, Cloud Lounge, Nimbus |
 | `src/ui.js` | The in-VR text panels and buttons (drawn on a canvas) |
 | `src/audio.js` | The sound engine: 3D ambience, events, the Woojer rumble layer, read-aloud |
 | `template.html` | The start page and grown-up tips. The built app is inlined into it |
