@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { drawCloudIcon } from './ui.js';
+import { makeWing, paint } from './aircraft.js';
+import { mountainRange } from './terrain.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Cabin frame: the child's eyes are at the origin, the plane points toward -Z,
@@ -29,7 +31,7 @@ export function rng(seed) {
   };
 }
 
-function canvasTex(w, h, draw, { repeat = null, aniso = 8, srgb = true } = {}) {
+export function canvasTex(w, h, draw, { repeat = null, aniso = 8, srgb = true } = {}) {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -70,7 +72,7 @@ function rrCtx(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-const lambert = (color, o = {}) => new THREE.MeshLambertMaterial({ color, ...o });
+export const lambert = (color, o = {}) => new THREE.MeshLambertMaterial({ color, ...o });
 // Interior material: lit, but with enough self-glow that the cabin always looks bright and friendly.
 const inside = (color, glow = 0.45, o = {}) =>
   new THREE.MeshLambertMaterial({
@@ -81,7 +83,7 @@ const inside = (color, glow = 0.45, o = {}) =>
     ...o,
   });
 
-function beam(p1, p2, w, h, mat) {
+export function beam(p1, p2, w, h, mat) {
   const len = p1.distanceTo(p2);
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, len), mat);
   m.position.copy(p1).add(p2).multiplyScalar(0.5);
@@ -306,112 +308,6 @@ function fuselageTexture() {
 let _fuseTex = null;
 const fuseTex = () => (_fuseTex = _fuseTex || fuselageTexture());
 
-// One wing, built in its own frame: root leading edge at the origin, span toward -X, chord toward +Z.
-export function makeWing(color = '#d5dbe2', accent = '#25a69a') {
-  const g = new THREE.Group();
-  const mat = lambert(color, { side: THREE.DoubleSide });
-  const dark = lambert('#b7c0ca', { side: THREE.DoubleSide });
-  const sh = new THREE.Shape();
-  sh.moveTo(0, -1.8);
-  sh.lineTo(-16.6, 5.0);
-  sh.lineTo(-16.6, 6.3);
-  sh.lineTo(0, 3.2);
-  sh.closePath();
-  const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.26, bevelEnabled: true, bevelThickness: 0.07, bevelSize: 0.07, bevelSegments: 2 });
-  geo.rotateX(Math.PI / 2);
-  const wing = new THREE.Mesh(geo, mat);
-  g.add(wing);
-  const TE = (x) => 3.2 + (x / -16.6) * 3.1;
-  const LE = (x) => -1.8 + (x / -16.6) * 6.8;
-
-  const makeHingeSet = (x0, x1, back, len, y, mat2, thick) => {
-    const p0 = new THREE.Vector3(x0, y, TE(x0) - back);
-    const p1 = new THREE.Vector3(x1, y, TE(x1) - back);
-    const d = p1.clone().sub(p0);
-    const L = d.length();
-    d.normalize();
-    const pivot = new THREE.Object3D();
-    pivot.position.copy(p0);
-    pivot.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), d);
-    const hinge = new THREE.Object3D();
-    pivot.add(hinge);
-    const bg = new THREE.BoxGeometry(L, thick, len);
-    bg.translate(L / 2, 0, len / 2);
-    hinge.add(new THREE.Mesh(bg, mat2));
-    g.add(pivot);
-    return hinge;
-  };
-  // flaps (inboard + outboard) and spoilers
-  const flaps = [makeHingeSet(-0.4, -7.6, 1.0, 1.05, -0.13, dark, 0.09), makeHingeSet(-8.0, -12.6, 0.8, 0.85, -0.13, dark, 0.08)];
-  const spoilers = [];
-  for (let i = 0; i < 4; i++) {
-    const x0 = -2.4 - i * 2.4;
-    spoilers.push(makeHingeSet(x0, x0 - 2.2, 1.75, 0.7, 0.115, mat, 0.04));
-  }
-
-  // winglet
-  const wl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.9, 1.05), lambert(accent));
-  wl.position.set(-16.75, 0.85, 5.95);
-  wl.rotation.z = 0.14;
-  wl.rotation.x = -0.35;
-  g.add(wl);
-
-  // engine on a pylon
-  const nac = new THREE.Group();
-  const ng = new THREE.CylinderGeometry(0.95, 0.8, 3.7, 28, 1, true);
-  ng.rotateX(Math.PI / 2);
-  nac.add(new THREE.Mesh(ng, lambert('#eef1f5', { side: THREE.DoubleSide })));
-  const lip = new THREE.Mesh(new THREE.TorusGeometry(0.93, 0.08, 10, 32), lambert('#c7ced8'));
-  lip.position.z = -1.85;
-  nac.add(lip);
-  const fan = new THREE.Mesh(new THREE.CircleGeometry(0.9, 28), lambert('#3a414d'));
-  fan.position.z = -1.6;
-  fan.rotation.y = Math.PI;
-  nac.add(fan);
-  const spin = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.5, 18), lambert('#dfe3e8'));
-  spin.rotation.x = -Math.PI / 2;
-  spin.position.z = -1.75;
-  nac.add(spin);
-  const ex = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.2, 18), lambert('#9aa3ad'));
-  ex.rotation.x = Math.PI / 2;
-  ex.position.z = 2.3;
-  nac.add(ex);
-  nac.position.set(-5.0, -1.25, LE(-5.0) - 1.0);
-  g.add(nac);
-  const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.9, 3.0), lambert('#e6eaef'));
-  pylon.position.set(-5.0, -0.55, LE(-5.0) + 0.1);
-  g.add(pylon);
-
-  // lights
-  const nav = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), new THREE.MeshBasicMaterial({ color: '#ff3b3b' }));
-  nav.position.set(-16.75, 0.05, 5.0);
-  g.add(nav);
-  const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
-  strobe.position.set(-16.75, 0.05, 6.2);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex(), color: '#ffffff', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-  glow.scale.setScalar(2.2);
-  strobe.add(glow);
-  g.add(strobe);
-
-  g.rotation.z = -0.075; // dihedral
-  return {
-    group: g,
-    setFlaps(a) {
-      flaps.forEach((h) => {
-        h.rotation.x = 0.5 * a;
-        h.position.z = 0.65 * a;
-      });
-    },
-    setSpoilers(a) {
-      spoilers.forEach((h) => (h.rotation.x = -0.8 * a));
-    },
-    strobe(t) {
-      const ph = t % 1.6;
-      glow.visible = ph < 0.06 || (ph > 0.18 && ph < 0.24);
-    },
-  };
-}
-
 let _glow = null;
 export function glowTex() {
   if (_glow) return _glow;
@@ -429,10 +325,10 @@ export function glowTex() {
 // Airliner in its own frame: fuselage center at origin, nose toward -Z, wheels touch y = -3.3.
 export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
   const g = new THREE.Group();
-  const white = lambert('#f7f9fb');
+  const white = paint('#f7f9fb', { roughness: 0.35 });
   const fg = new THREE.CylinderGeometry(2, 2, 30, 40, 1, true);
   fg.rotateX(Math.PI / 2);
-  const fuse = new THREE.Mesh(fg, lambert('#ffffff', { map: fuseTex() }));
+  const fuse = new THREE.Mesh(fg, paint('#ffffff', { map: fuseTex(), roughness: 0.33 }));
   g.add(fuse);
   // nose: lower half-sphere rotated so it points to -Z, stretched forward
   const nose = new THREE.Mesh(new THREE.SphereGeometry(2, 32, 20, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), white);
@@ -442,7 +338,7 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
   g.add(nose);
   const cock = new THREE.Mesh(
     new THREE.SphereGeometry(2.03, 24, 4, Math.PI * 1.5 - 0.75, 1.5, Math.PI / 2 + 0.42, 0.3),
-    lambert('#24324a', { side: THREE.DoubleSide })
+    paint('#1c2638', { side: THREE.DoubleSide, roughness: 0.08, metalness: 0.6 })
   );
   cock.rotation.x = Math.PI / 2;
   cock.position.z = -15;
@@ -465,7 +361,7 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
   const fgeo = new THREE.ExtrudeGeometry(fs, { depth: 0.36, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 1 });
   fgeo.translate(0, 0, -0.18);
   fgeo.rotateY(-Math.PI / 2);
-  const fin = new THREE.Mesh(fgeo, lambert(tail));
+  const fin = new THREE.Mesh(fgeo, paint(tail, { roughness: 0.35 }));
   g.add(fin);
   // a white cloud on the tail, both sides
   const logoTex = canvasTex(256, 256, (ctx) => drawCloudIcon(ctx, 128, 128, 110, '#ffffff'));
@@ -485,7 +381,7 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
     hs.closePath();
     const hg = new THREE.ExtrudeGeometry(hs, { depth: 0.18, bevelEnabled: false });
     hg.rotateX(Math.PI / 2);
-    const h = new THREE.Mesh(hg, lambert('#d5dbe2', { side: THREE.DoubleSide }));
+    const h = new THREE.Mesh(hg, paint('#d5dbe2', { side: THREE.DoubleSide, roughness: 0.4, metalness: 0.25 }));
     h.position.set(s * -0.6, 0.6, 0);
     h.scale.x = s;
     g.add(h);
@@ -493,8 +389,8 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
   // wings
   const wings = [];
   for (const s of [1, -1]) {
-    const w = makeWing('#d5dbe2', tail);
-    w.group.position.set(s * -1.7, -0.7, 2);
+    const w = makeWing({ accent: tail, nav: s > 0 ? '#ff2a2a' : '#22ff66' });
+    w.group.position.set(s * -1.9, -0.85, 2);
     if (s < 0) {
       w.group.scale.x = -1;
       w.group.rotation.z = 0.075;
@@ -503,8 +399,8 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
     wings.push(w);
   }
   if (withGear) {
-    const tire = lambert('#2a2d33');
-    const strut = lambert('#9aa1aa');
+    const tire = paint('#26292e', { roughness: 0.85 });
+    const strut = paint('#b8bec6', { roughness: 0.3, metalness: 0.8 });
     const wg = new THREE.CylinderGeometry(0.55, 0.55, 0.35, 18);
     wg.rotateZ(Math.PI / 2);
     for (const [x, z] of [[-2.9, 3.8], [2.9, 3.8], [0, -12.2]]) {
@@ -524,48 +420,7 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
 }
 
 // ---------------------------------------------------------------- Outside world for the flight
-function fieldsTexture() {
-  return canvasTex(1024, 1024, (ctx, W) => {
-    const R = rng(7);
-    ctx.fillStyle = '#4c7444';
-    ctx.fillRect(0, 0, W, W);
-    const cols = ['#8db662', '#a5c36b', '#c3bf78', '#7aa658', '#b0b874', '#9fc07a'];
-    for (let i = 0; i < 90; i++) {
-      ctx.save();
-      ctx.translate(R() * W, R() * W);
-      ctx.rotate((R() - 0.5) * 0.6);
-      ctx.fillStyle = cols[Math.floor(R() * cols.length)];
-      const w = 40 + R() * 140;
-      const h = 30 + R() * 110;
-      ctx.fillRect(-w / 2, -h / 2, w, h);
-      ctx.restore();
-    }
-    ctx.fillStyle = '#3f6a3d';
-    for (let i = 0; i < 400; i++) {
-      ctx.beginPath();
-      ctx.arc(R() * W, R() * W, 4 + R() * 14, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = '#5d90b8';
-    for (let i = 0; i < 3; i++) {
-      ctx.beginPath();
-      ctx.ellipse(R() * W, R() * W, 30 + R() * 60, 15 + R() * 40, R() * 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.strokeStyle = '#cfc8b6';
-    ctx.lineWidth = 3;
-    for (let i = 0; i < 6; i++) {
-      ctx.beginPath();
-      ctx.moveTo(R() * W, 0);
-      ctx.bezierCurveTo(R() * W, W * 0.3, R() * W, W * 0.7, R() * W, W);
-      ctx.stroke();
-    }
-    ctx.fillStyle = '#b5473a';
-    for (let i = 0; i < 40; i++) ctx.fillRect(R() * W, R() * W, 4, 4);
-  }, { repeat: [1, 1], aniso: 16 });
-}
-
-function concreteTexture(rep) {
+export function concreteTexture(rep) {
   return canvasTex(256, 256, (ctx, W) => {
     ctx.fillStyle = '#b7bbc0';
     ctx.fillRect(0, 0, W, W);
@@ -589,14 +444,14 @@ function concreteTexture(rep) {
   }, { repeat: [rep, rep], aniso: 16 });
 }
 
-const offsetMat = (mat, f) => {
+export const offsetMat = (mat, f) => {
   mat.polygonOffset = true;
   mat.polygonOffsetFactor = f;
   mat.polygonOffsetUnits = f;
   return mat;
 };
 
-function trees(count, area, avoid, seed, y) {
+export function trees(count, area, avoid, seed, y) {
   const R = rng(seed);
   const geo = new THREE.ConeGeometry(1, 1, 6);
   geo.translate(0, 0.5, 0);
@@ -639,215 +494,6 @@ export function mountains(seed, y, ring) {
   g.add(new THREE.Mesh(mergeGeometries(rocks), rock));
   g.add(new THREE.Mesh(mergeGeometries(caps), snow));
   return g;
-}
-
-export function buildOutside() {
-  const g = new THREE.Group();
-  const groundTex = fieldsTexture();
-  const TILE = 1400;
-  const GS = 18000;
-  groundTex.repeat.set(GS / TILE, GS / TILE);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(GS, GS), lambert('#ffffff', { map: groundTex }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = GROUND_Y - 0.05;
-  g.add(ground);
-
-  // --- runway airport (moves with distance travelled)
-  const airport = new THREE.Group();
-  g.add(airport);
-  const gy = GROUND_Y;
-  const flat = (w, l, color, x, z, f) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, l), offsetMat(lambert(color), f));
-    m.rotation.x = -Math.PI / 2;
-    m.position.set(x, gy, z);
-    airport.add(m);
-    return m;
-  };
-  flat(900, 6200, '#7fae57', CX - 150, -1500, -1);
-  flat(46, 3000, '#454a52', CX, -1440, -2);
-  flat(24, 3000, '#555a61', CX - 170, -1440, -2);
-  for (const z of [-150, -1400, -2700]) flat(150, 24, '#555a61', CX - 95, z, -3);
-  flat(0.9, 3000, '#f2f2f2', CX - 21.8, -1440, -4);
-  flat(0.9, 3000, '#f2f2f2', CX + 21.8, -1440, -4);
-  const dashMat = offsetMat(lambert('#f5f5f5'), -4);
-  const dashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.9, 30).rotateX(-Math.PI / 2), dashMat, 50);
-  const m4 = new THREE.Matrix4();
-  const q0 = new THREE.Quaternion();
-  const one = new THREE.Vector3(1, 1, 1);
-  for (let i = 0; i < 50; i++) dashes.setMatrixAt(i, m4.compose(new THREE.Vector3(CX, gy, -i * 60), q0, one));
-  airport.add(dashes);
-  const keys = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.8, 32).rotateX(-Math.PI / 2), dashMat, 24);
-  for (let i = 0; i < 12; i++) {
-    keys.setMatrixAt(i * 2, m4.compose(new THREE.Vector3(CX - 4 - i * 1.5, gy, 36), q0, one));
-    keys.setMatrixAt(i * 2 + 1, m4.compose(new THREE.Vector3(CX + 4 + i * 1.5, gy, 36), q0, one));
-  }
-  airport.add(keys);
-  const tdz = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.8, 22).rotateX(-Math.PI / 2), dashMat, 24);
-  let k = 0;
-  for (const z of [-300, -450, -600]) for (const dx of [-9, -6.5, -4, 4, 6.5, 9]) if (k < 24) tdz.setMatrixAt(k++, m4.compose(new THREE.Vector3(CX + dx, gy, z), q0, one));
-  tdz.count = k;
-  airport.add(tdz);
-  const lightGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
-  const lights = new THREE.InstancedMesh(lightGeo, new THREE.MeshBasicMaterial({ color: '#fff3c4' }), 102);
-  for (let i = 0; i < 51; i++) {
-    lights.setMatrixAt(i * 2, m4.compose(new THREE.Vector3(CX - 23.5, gy + 0.25, 60 - i * 60), q0, one));
-    lights.setMatrixAt(i * 2 + 1, m4.compose(new THREE.Vector3(CX + 23.5, gy + 0.25, 60 - i * 60), q0, one));
-  }
-  airport.add(lights);
-  const boards = new THREE.InstancedMesh(new THREE.BoxGeometry(1.4, 1.1, 0.25), lambert('#15181d'), 10);
-  for (let i = 0; i < 10; i++) boards.setMatrixAt(i, m4.compose(new THREE.Vector3(CX - 38, gy + 0.8, -i * 300), q0, one));
-  airport.add(boards);
-  // buildings far away
-  const bld = lambert('#d9dde2');
-  const term = new THREE.Mesh(new THREE.BoxGeometry(60, 16, 320), bld);
-  term.position.set(CX - 430, gy + 8, -1500);
-  airport.add(term);
-  const glass = new THREE.Mesh(new THREE.BoxGeometry(61, 6, 300), lambert('#6c93b3'));
-  glass.position.set(CX - 430, gy + 9, -1500);
-  airport.add(glass);
-  const tower = new THREE.Mesh(new THREE.CylinderGeometry(3, 4, 34, 12), bld);
-  tower.position.set(CX - 330, gy + 17, -900);
-  airport.add(tower);
-  const cab = new THREE.Mesh(new THREE.CylinderGeometry(7, 5, 6, 12), lambert('#3f6b80'));
-  cab.position.set(CX - 330, gy + 37, -900);
-  airport.add(cab);
-  for (let i = 0; i < 3; i++) {
-    const h = new THREE.Mesh(new THREE.BoxGeometry(70, 22, 60), lambert('#c3c9d1'));
-    h.position.set(CX - 300, gy + 11, -2100 - i * 90);
-    airport.add(h);
-    const roof = new THREE.Mesh(new THREE.CylinderGeometry(30, 30, 70, 16, 1, false, 0, Math.PI), lambert('#9fa8b3'));
-    roof.rotation.z = Math.PI / 2;
-    roof.rotation.y = Math.PI / 2;
-    roof.position.set(CX - 300, gy + 22, -2100 - i * 90);
-    roof.scale.set(1, 1, 0.35);
-    airport.add(roof);
-  }
-  airport.add(
-    trees(2600, { x0: -2600, x1: 2600, z0: -6500, z1: 2500 }, (x, z) => (x > CX - 480 && x < CX + 140 && z > -3600 && z < 900) || (x > CX - 520 && x < CX - 250 && z > -2400 && z < -700), 11, gy)
-  );
-  airport.add(mountains(5, gy - 30, { count: 16, a0: 0, a1: Math.PI * 2, d0: 4500, d1: 7000, h0: 500, h1: 1100, cz: -1500 }));
-
-  // --- gate area (parked at the terminal)
-  const gate = new THREE.Group();
-  g.add(gate);
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), offsetMat(lambert('#ffffff', { map: concreteTexture(300) }), -1));
-  apron.rotation.x = -Math.PI / 2;
-  apron.position.y = gy;
-  gate.add(apron);
-  const lead = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 160), offsetMat(lambert('#f2c230'), -3));
-  lead.rotation.x = -Math.PI / 2;
-  lead.position.set(CX, gy, -40);
-  gate.add(lead);
-  const stop = new THREE.Mesh(new THREE.PlaneGeometry(10, 0.3), offsetMat(lambert('#d9443a'), -3));
-  stop.rotation.x = -Math.PI / 2;
-  stop.position.set(CX - 6, gy, -36);
-  gate.add(stop);
-  const facadeTex = canvasTex(512, 256, (ctx, W, H) => {
-    ctx.fillStyle = '#e4e8ed';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#6f97b8';
-    ctx.fillRect(0, H * 0.25, W, H * 0.5);
-    ctx.strokeStyle = '#dfe5ea';
-    ctx.lineWidth = 4;
-    for (let x = 0; x < W; x += 32) {
-      ctx.beginPath();
-      ctx.moveTo(x, H * 0.25);
-      ctx.lineTo(x, H * 0.75);
-      ctx.stroke();
-    }
-    ctx.fillStyle = 'rgba(40,60,80,0.35)';
-    const R = rng(9);
-    for (let i = 0; i < 40; i++) ctx.fillRect(R() * W, H * 0.55 + R() * 20, 4, 18);
-  }, { repeat: [6, 1] });
-  const termMats = [lambert('#ffffff', { map: facadeTex }), bld, bld, bld, bld, bld];
-  const tb = new THREE.Mesh(new THREE.BoxGeometry(60, 18, 260), [termMats[0], ...termMats.slice(1)]);
-  tb.position.set(-70, gy + 9, -20);
-  gate.add(tb);
-  // jet bridge: fixed tunnel from terminal + telescoping end that rolls away
-  const bridgeMat = lambert('#d0d5db');
-  const bridgeY = FLOOR + 1.25;
-  const tunnelZ = -9.4;
-  const bridge = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 2.6), bridgeMat);
-  gate.add(bridge);
-  const bridgeCab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.9, 3.4), lambert('#bfc6ce'));
-  gate.add(bridgeCab);
-  const leg = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1, 0.4), lambert('#6d7480'));
-  gate.add(leg);
-  const wheels = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 0.8), lambert('#2b2f36'));
-  gate.add(wheels);
-  const setBridge = (xEnd) => {
-    const x0 = -40;
-    const len = xEnd - x0 - 1.2;
-    bridge.scale.x = len;
-    bridge.position.set(x0 + len / 2, bridgeY, tunnelZ);
-    bridgeCab.position.set(xEnd - 1.2, bridgeY, tunnelZ);
-    const lx = xEnd - 7;
-    leg.scale.y = bridgeY - 1.25 - gy;
-    leg.position.set(lx, (bridgeY - 1.25 + gy) / 2, tunnelZ);
-    wheels.position.set(lx, gy + 0.3, tunnelZ);
-  };
-  setBridge(-0.75);
-  // ground vehicles
-  const tug = new THREE.Group();
-  const tugBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.0, 2.6), lambert('#f2b632'));
-  tugBody.position.y = 0.8;
-  tug.add(tugBody);
-  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), new THREE.MeshBasicMaterial({ color: '#ff9d00' }));
-  beacon.position.set(0, 1.4, 0.4);
-  tug.add(beacon);
-  for (let c = 1; c <= 3; c++) {
-    const cart = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 2.4), lambert('#7d8a99'));
-    cart.position.set(0, 0.9, c * 3.0);
-    tug.add(cart);
-    const bags = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 2.0), lambert(['#c0392b', '#2e86de', '#27ae60'][c - 1]));
-    bags.position.set(0, 1.6, c * 3.0);
-    tug.add(bags);
-  }
-  tug.position.set(-14, gy, 0);
-  gate.add(tug);
-  const truck = new THREE.Group();
-  const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 6, 16), lambert('#f3f5f7'));
-  tank.rotation.x = Math.PI / 2;
-  tank.position.set(0, 1.7, 0.6);
-  truck.add(tank);
-  const tcab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 1.8), lambert('#2e6fb5'));
-  tcab.position.set(0, 1.4, -3.2);
-  truck.add(tcab);
-  truck.position.set(-22, gy, 14);
-  truck.rotation.y = 0.5;
-  gate.add(truck);
-  const loader = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.25, 7), lambert('#505862'));
-  loader.position.set(-2.6, gy + 1.6, 9);
-  loader.rotation.x = 0.28;
-  gate.add(loader);
-  gate.add(mountains(8, gy - 30, { count: 14, a0: 0, a1: Math.PI * 2, d0: 4200, d1: 6500, h0: 500, h1: 1000 }));
-  gate.add(trees(900, { x0: -1100, x1: 1100, z0: -1100, z1: 1100 }, (x, z) => Math.abs(x) < 420 && Math.abs(z) < 520, 21, gy));
-
-  // --- cloud layer (3 tiles that wrap around as we fly)
-  const tiles = [];
-  const TL = 1700;
-  for (let t = 0; t < 3; t++) {
-    const tile = cloudField({ count: 55, W: 5000, L: TL, y0: CLOUD_ALT - 25, y1: CLOUD_ALT + 15, rMin: 35, rMax: 85, seed: 100 + t });
-    tile.userData.base = -TL * 1.5 + TL * (t + 0.5);
-    g.add(tile);
-    tiles.push(tile);
-  }
-  const high = cloudField({ count: 30, W: 9000, L: 9000, y0: 1500, y1: 1800, rMin: 60, rMax: 160, seed: 300 });
-  g.add(high);
-
-  return {
-    group: g,
-    ground,
-    groundTex,
-    TILE,
-    airport,
-    gate,
-    setBridge,
-    tug,
-    beacon,
-    tiles,
-    TL,
-  };
 }
 
 // ---------------------------------------------------------------- Terminal (looking out at our plane)
@@ -1045,7 +691,7 @@ export function buildTerminal() {
   other.wings.forEach((w) => w.setFlaps(0.4));
   g.add(other.group);
   g.add(trees(1200, { x0: -3000, x1: 3000, z0: -2600, z1: -840 }, (x, z) => z > -900 && z < -620, 31, ay));
-  g.add(mountains(12, ay - 30, { count: 14, a0: -Math.PI * 0.95, a1: -Math.PI * 0.05, d0: 4000, d1: 6500, h0: 500, h1: 1200 }));
+  g.add(mountainRange(12, ay - 10, { r0: 3800, r1: 7200, hMax: 1000 }));
   g.add(cloudField({ count: 26, W: 9000, L: 5000, y0: 700, y1: 1100, rMin: 60, rMax: 160, seed: 41 }));
   const cl = cloudField({ count: 26, W: 9000, L: 5000, y0: 700, y1: 1100, rMin: 60, rMax: 160, seed: 41 });
   cl.position.z = -4000;

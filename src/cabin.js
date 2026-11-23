@@ -759,15 +759,15 @@ export function buildCabin(envMap = null) {
     shadow.renderOrder = 2;
   }
 
-  // --- sunlight through the left windows, landing on the window seats
+  // --- sunlight through the right-hand windows (the sun is to the right), landing on the window seats
   const sunMat = new THREE.MeshBasicMaterial({ map: T.sun, color: '#ffe3b8', transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, toneMapped: false });
   {
     const pg = new THREE.PlaneGeometry(0.3, 0.3).rotateX(-Math.PI / 2);
     const sm = [];
     for (const zw of WINDOWS) {
-      const zp = zw + 0.37;
+      const zp = zw + 0.45;
       const onSeat = ROWS.some((z) => Math.abs(zp - (z - 0.02)) < 0.17);
-      if (onSeat) sm.push(M4(0.01, -0.557, zp, qY(0.12)));
+      if (onSeat) sm.push(M4(2.71, -0.557, zp, qY(-0.12)));
     }
     const sun = add(placeAll(pg, sm), sunMat);
     sun.renderOrder = 3;

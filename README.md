@@ -143,7 +143,10 @@ Commit the updated `docs/` folder and GitHub Pages republishes within a minute o
 | `src/i18n.js` | All the words, in English and Norwegian |
 | `src/main.js` | The story's structure (`STEPS`), the taxi, takeoff and landing timelines (`startSeq`), scene setups, input and the start page logic |
 | `src/cabin.js` | The cabin interior: curved sidewalls, deep window reveals with glass and shades, seats, bins with service units and row numbers, ceiling, floor, shadows and sunlight patches (all textures generated in code) |
-| `src/world.js` | The rest of the 3D world: airliner, wing with moving flaps and spoilers, airport, terrain, clouds, terminal, Cloud Lounge, Nimbus |
+| `src/aircraft.js` | The wing and engine up close: real airfoil shape with panel lines, rivets and NO STEP markings, moving slats, flaps (with their fairings), spoilers and winglet; the engine with a spinning fan, polished lip, core, plug and a thrust reverser that slides open after touchdown. Paint reflects the sky |
+| `src/ground.js` | Everything outside during taxi, takeoff and landing: the landscape (fields with crop rows, forest, lakes, roads, villages), close-up ground detail, the runway (asphalt, markings, tyre marks, edge lights, approach lights with the running "rabbit", PAPI), taxiways, signs, windsock, terminal with parked planes, tower, hangars, trees, houses, grass tufts, the plane's shadow, the gate and the clouds |
+| `src/terrain.js` | Shared noise and the ring of mountains |
+| `src/world.js` | The airliner body, clouds, sky, terminal, Cloud Lounge, Nimbus |
 | `src/ui.js` | The in-VR text panels and buttons (drawn on a canvas) |
 | `src/audio.js` | The sound engine: 3D ambience, events, the Woojer rumble layer, read-aloud |
 | `template.html` | The start page and grown-up tips. The built app is inlined into it |

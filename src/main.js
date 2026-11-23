@@ -4,6 +4,8 @@ import { Sound, Voice } from './audio.js';
 import { Panel } from './ui.js';
 import * as W from './world.js';
 import { buildCabin } from './cabin.js';
+import { buildOutside } from './ground.js';
+import { setExteriorEnv, makeSkyEnv } from './aircraft.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { LANGS, pickLanguage } from './i18n.js';
 
@@ -59,7 +61,9 @@ plane.group.position.set(W.CX, W.FUSE_Y, -2);
 const cabinRoot = new THREE.Group();
 cabinRoot.add(cabin.group, plane.group);
 scene.add(cabinRoot);
-const outside = W.buildOutside();
+const SUN_DIR = new THREE.Vector3(0.55, 0.62, -0.55).normalize(); // sun to the front right, so the plane's shadow falls on the left
+setExteriorEnv(makeSkyEnv(renderer, { sun: SUN_DIR.toArray() }));
+const outside = buildOutside();
 scene.add(outside.group);
 const nimbus = W.makeNimbus();
 scene.add(nimbus.group);
@@ -99,7 +103,7 @@ const PRESETS = {
     nimbus: [[0.86, 0.22, -1.12], 0.85],
   },
   cabin: {
-    sky: DAY,
+    sky: { ...DAY, sunDir: [0.55, 0.62, -0.55] },
     fog: ['#cde4fb', 450, 7500],
     hemi: ['#eef3fa', '#a9b1ba', 1.15],
     sun: ['#fff1dc', 1.95],
@@ -177,6 +181,8 @@ const F = {
   nRT: 0,
   apu: 0,
   apuT: 0,
+  rev: 0, // thrust reverser sleeves (0 = stowed, 1 = open)
+  revT: 0,
   life: 0, // how busy the cabin sounds
 };
 
@@ -206,6 +212,7 @@ function applySetup(key, hard) {
     F.engine = S.engine;
     F.flaps = S.flaps;
     F.spoil = 0;
+    F.rev = F.revT = 0;
     F.nL = F.nR = F.nLT = F.nRT = S.eng ?? 1;
     F.apu = F.apuT = S.apu ?? 0;
     if (S.outside === 'gate') outside.setBridge(-0.75);
@@ -322,11 +329,13 @@ function updateFlight(dt) {
   plane.wings[0].group.rotation.z = -0.075 - flex;
   plane.wings[1].group.rotation.z = 0.075 + flex;
 
-  outside.groundTex.offset.y = (F.dist / outside.TILE) % 1;
   outside.ground.visible = F.mode !== 'gate';
   outside.gate.visible = F.mode === 'gate';
   outside.gate.position.z = F.dist - F.gateZ0;
   const az = F.rwZ0 + F.dist;
+  outside.setScroll(az);
+  outside.setShadow(F.alt + 3.3 - F.bumpY * 1.7, SUN_DIR);
+  outside.update(dt, T);
   outside.airport.visible = F.mode !== 'gate' && az > -12000 && az < 12000;
   outside.airport.position.z = az;
   const TL = outside.TL;
@@ -350,9 +359,13 @@ function updateFlight(dt) {
   cabin.setSun(1 - c);
   hemi.intensity = lerp(1.15, 0.9, c);
 
-  plane.wings.forEach((w) => {
+  F.rev += clamp(F.revT - F.rev, -dt / 1.5, dt / 1.5);
+  plane.wings.forEach((w, i) => {
     w.setFlaps(F.flaps);
+    w.setSlats(clamp(F.flaps * 2, 0, 1));
     w.setSpoilers(F.spoil);
+    w.setReverse(F.rev);
+    w.spinFan(i === 0 ? F.nL : F.nR, F.engine, dt);
     w.strobe(T);
   });
 
@@ -716,9 +729,13 @@ function startSeq(name) {
       });
       F.spoilT = 1;
       F.engineT = 0.85;
+      later(0.9, () => (F.revT = 1));
       cap('touchdown');
     });
-    at(50, () => (F.engineT = 0.15));
+    at(50, () => {
+      F.engineT = 0.15;
+      later(1.2, () => (F.revT = 0));
+    });
     at(60, () => {
       sound.ding();
       cabin.setSign(false);
@@ -849,6 +866,7 @@ function updateXRHover() {
 
 // ------------------------------------------------------------ preview (phone / desktop) controls
 let yaw = 0;
+const camOff = new THREE.Vector3(); // test hook: lean toward the window
 let pitch = 0;
 let drag = null;
 const ndc = new THREE.Vector2();
@@ -1080,7 +1098,7 @@ function tick(dt) {
       yaw = Math.sin(T * 0.05) * 0.5;
       pitch = 0.05;
     }
-    camera.position.set(0, 0, 0);
+    camera.position.copy(camOff);
     camera.rotation.set(pitch, yaw, 0);
     headPos.set(0, 0, 0);
   }
@@ -1104,4 +1122,4 @@ if (/[?&]debug\b/.test(location.search)) window.__fly = {
     return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight, action: r.action };
   },
   info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles }),
-  go, F, tick, action, get step() { return STEPS[cur] && STEPS[cur].id; }, setView: (y, p) => ((yaw = y), (pitch = p)), begin, sound };
+  go, F, tick, action, get step() { return STEPS[cur] && STEPS[cur].id; }, setView: (y, p) => ((yaw = y), (pitch = p)), lean: (x, y, z) => camOff.set(x, y, z), scene, outside, plane, begin, sound };
