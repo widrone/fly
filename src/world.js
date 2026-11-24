@@ -131,7 +131,27 @@ export function makeSky() {
 // ---------------------------------------------------------------- Clouds
 const puffGeo = new THREE.IcosahedronGeometry(1, 1);
 const puffGeoFine = new THREE.IcosahedronGeometry(1, 2);
-export const cloudMat = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#aebbd0', emissiveIntensity: 0.55 });
+// Clouds: brighter tops and soft grey-blue bellies, edges that thin out like real cloud (no hard
+// outline), and they fade away close up so you never see the shapes they're made of.
+export const cloudMat = new THREE.MeshLambertMaterial({ color: '#ffffff', emissive: '#aebbd0', emissiveIntensity: 0.55, alphaHash: true });
+cloudMat.onBeforeCompile = (sh) => {
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vCN;\nvarying float vCY;')
+    .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\nvCN = normalize(transformedNormal);\nvCY = position.y;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vCN;\nvarying float vCY;')
+    .replace(
+      '#include <alphahash_fragment>',
+      `{
+        float edge = abs(dot(normalize(vCN), normalize(vViewPosition)));
+        float near = smoothstep(14.0, 70.0, length(vViewPosition));
+        diffuseColor.a *= smoothstep(0.04, 0.5, edge) * near;
+        diffuseColor.rgb *= mix(0.74, 1.04, smoothstep(-0.9, 0.7, vCY));
+      }
+      #include <alphahash_fragment>`
+    );
+};
+cloudMat.customProgramCacheKey = () => 'cloud-soft';
 
 export function cloudField({ count, W, L, y0, y1, rMin, rMax, seed, mat = cloudMat, fine = false }) {
   const R = rng(seed);
@@ -420,7 +440,7 @@ export function makeAirliner({ tail = '#25a69a', withGear = true } = {}) {
 }
 
 // ---------------------------------------------------------------- Outside world for the flight
-export function concreteTexture(rep) {
+export function concreteTexture(rep, repY = rep) {
   return canvasTex(256, 256, (ctx, W) => {
     ctx.fillStyle = '#b7bbc0';
     ctx.fillRect(0, 0, W, W);
@@ -441,7 +461,7 @@ export function concreteTexture(rep) {
       ctx.lineTo(W, x);
       ctx.stroke();
     }
-  }, { repeat: [rep, rep], aniso: 16 });
+  }, { repeat: [rep, repY], aniso: 16 });
 }
 
 export const offsetMat = (mat, f) => {

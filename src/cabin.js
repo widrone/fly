@@ -6,6 +6,7 @@
 // Frame: the child's eyes at the origin, nose toward -Z, left windows at -X.
 
 import * as THREE from 'three';
+import { windowDetails } from './details.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CX, FLOOR, ROWS, WINDOWS, rng } from './world.js';
@@ -465,6 +466,13 @@ export function buildCabin(envMap = null) {
   add(wallGeometry(-1), M.wall);
   add(mergeGeometries([revealGeometry(1), revealGeometry(-1)]), M.reveal);
   add(mergeGeometries([paneGeometry(1, PANE.w, PANE.h, PANE.r, PANE.x + 0.004), paneGeometry(-1, PANE.w, PANE.h, PANE.r, PANE.x + 0.004)]), M.glass).renderOrder = 5;
+  // scratches, frost and raindrops on the panes (see details.js)
+  const win = windowDetails(
+    [paneGeometry(1, PANE.w, PANE.h, PANE.r, PANE.x + 0.005), paneGeometry(-1, PANE.w, PANE.h, PANE.r, PANE.x + 0.005)],
+    PANE,
+    [1, -1]
+  );
+  win.meshes.forEach((m) => g.add(m));
   // tiny breather hole near the bottom of each pane
   {
     const dot = new THREE.CircleGeometry(0.003, 10);
@@ -819,6 +827,7 @@ export function buildCabin(envMap = null) {
   g.add(beltOpen, beltClosed);
 
   return {
+    setWindow: (frost, wet, flowStep, light) => win.set(frost, wet, flowStep, light),
     group: g,
     tray,
     cup,

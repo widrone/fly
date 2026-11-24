@@ -127,7 +127,7 @@ All the words are in `src/i18n.js`, one block per language. Each block has:
 
 The Quest browser has no Norwegian text-to-speech voice, so Nimbus's Norwegian lines are pre-recorded MP3s in `docs/voice/nb/` (made with the Kibbu TTS server, then trimmed and loudness-matched with ffmpeg). Each file is named by a short hash of the exact words (`src/voiceclips.js`), and `index.json` lists them. When a line has no recording, for example after you edit the text, the browser's own voice is used for that line if it has one.
 
-- `node tools/voice-lines.mjs nb` lists every spoken line and the file name it needs.
+- `node tools/voice-lines.mjs nb` lists every spoken line, who says it (`nimbus` or `crew`), and the file name it needs. The crew's lines are played through a loudspeaker filter in the app, and should be recorded with a different voice from Nimbus.
 - Make the missing ones, put them in `docs/voice/nb/`, add them to `index.json`, and redeploy.
 - **Read-aloud:** this uses the device's built-in voices. Norwegian is only read aloud if the device has a Norwegian voice. It's never read by an English voice. If there's no Norwegian voice, the start page says so and the words are shown on screen only.
   Desktops usually have one (e.g. "Nora" on Mac). The Quest Browser may not.
@@ -150,6 +150,7 @@ Commit the updated `docs/` folder and GitHub Pages republishes within a minute o
 | `src/cabin.js` | The cabin interior: curved sidewalls, deep window reveals with glass and shades, seats, bins with service units and row numbers, ceiling, floor, shadows and sunlight patches (all textures generated in code) |
 | `src/aircraft.js` | The wing and engine up close: real airfoil shape with panel lines, rivets and NO STEP markings, moving slats, flaps (with their fairings), spoilers and winglet; the engine with a spinning fan, polished lip, core, plug and a thrust reverser that slides open after touchdown. Paint reflects the sky |
 | `src/ground.js` | Everything outside during taxi, takeoff and landing: the landscape (fields with crop rows, forest, lakes, roads, villages), close-up ground detail, the runway (asphalt, markings, tyre marks, edge lights, approach lights with the running "rabbit", PAPI), taxiways, signs, windsock, terminal with parked planes, tower, hangars, trees, houses, grass tufts, the plane's shadow, the gate and the clouds |
+| `src/safety.js` | The safety demo in the cabin: EXIT signs, floor path lights, glowing frames on the seatbelt, the oxygen-mask panel, the life vest and the safety card, and the props for the "try it yourself" missions |
 | `src/terrain.js` | Shared noise and the ring of mountains |
 | `src/world.js` | The airliner body, clouds, sky, terminal, Cloud Lounge, Nimbus |
 | `src/ui.js` | The in-VR text panels and buttons (drawn on a canvas) |

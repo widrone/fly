@@ -10,7 +10,7 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { CX, GROUND_Y, CLOUD_ALT, FLOOR, rng, canvasTex, concreteTexture, offsetMat, lambert, cloudField, makeAirliner, glowTex } from './world.js';
+import { CX, GROUND_Y, CLOUD_ALT, FLOOR, FUSE_Y as W_FUSE_Y, rng, canvasTex, concreteTexture, offsetMat, lambert, cloudField, makeAirliner, glowTex } from './world.js';
 import { bakeStatic } from './aircraft.js';
 import { periodicNoise, mountainRange } from './terrain.js';
 
@@ -811,7 +811,8 @@ export function buildOutside() {
     }
     airport.add(forest(pts, tuft, mat, 1700));
   }
-  airport.add(mountainRange(5, gy - 10, { cx: CX, cz: -1500 }));
+  const mountA = mountainRange(5, gy - 10, { cx: CX, cz: -1500 });
+  airport.add(mountA);
 
   // ---------------- gate area (parked at the terminal)
   const gate = new THREE.Group();
@@ -836,6 +837,41 @@ export function buildOutside() {
     tiles.push(tile);
   }
   g.add(cloudField({ count: 30, W: 9000, L: 9000, y0: 1500, y1: 1800, rMin: 60, rMax: 160, seed: 300 }));
+
+  // ---------------- the cloud sea, seen from above: a soft, broken white deck just over the
+  // puffy clouds, with gaps where you can see the ground. It faces up only, so from below it
+  // is invisible and you see the single clouds instead.
+  const DECK = 2600; // metres per repeat
+  const deckTex = (() => {
+    const N = 512;
+    const c = cnv(N, N);
+    const x = c.getContext('2d');
+    const img = x.createImageData(N, N);
+    const n1 = periodicNoise(8, 61), n2 = periodicNoise(24, 62), n3 = periodicNoise(72, 63);
+    for (let yy = 0; yy < N; yy++)
+      for (let xx = 0; xx < N; xx++) {
+        const u = xx / N, v = yy / N;
+        const f = 0.55 * n1(u * 8, v * 8) + 0.3 * n2(u * 24, v * 24) + 0.15 * n3(u * 72, v * 72);
+        const a = THREE.MathUtils.smoothstep(f, 0.4, 0.58);
+        const shade = 0.84 + 0.16 * THREE.MathUtils.smoothstep(f, 0.45, 0.8);
+        const i = (yy * N + xx) * 4;
+        img.data[i] = 255 * shade;
+        img.data[i + 1] = 255 * (shade * 0.99 + 0.01);
+        img.data[i + 2] = 255 * Math.min(1, shade * 1.03 + 0.02);
+        img.data[i + 3] = 255 * a;
+      }
+    x.putImageData(img, 0, 0);
+    return texOf(c, { srgb: true });
+  })();
+  deckTex.repeat.set(20000 / DECK, 20000 / DECK);
+  const deck = new THREE.Mesh(
+    new THREE.PlaneGeometry(20000, 20000).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ map: deckTex, transparent: true, depthWrite: false, opacity: 0, fog: true })
+  );
+  deck.position.y = CLOUD_ALT + 8;
+  deck.renderOrder = 2;
+  deck.visible = false;
+  g.add(deck);
 
   let rabbitT = 0;
   return {
@@ -862,6 +898,17 @@ export function buildOutside() {
       shadow.visible = fade > 0.01;
       shadow.scale.setScalar(1 + h / 500);
     },
+    // alt: height above the runway; dist: distance flown (scrolls the cloud sea)
+    setSkyAlt(alt, dist) {
+      // mountains only below the clouds: from above they would poke out as dark islands
+      const low = alt < CLOUD_ALT - 35;
+      mountA.visible = low;
+      gateParts.mountG.visible = low;
+      const k = THREE.MathUtils.smoothstep(alt, CLOUD_ALT + 25, CLOUD_ALT + 110);
+      deck.visible = k > 0.01;
+      deck.material.opacity = 0.92 * k;
+      deckTex.offset.y = ((dist / DECK) % 1 + 1) % 1;
+    },
     update(dt, T) {
       rabbitT = (rabbitT + dt * 2.2) % 1;
       rabbitPos.setZ(0, 900 - rabbitT * 810);
@@ -872,74 +919,283 @@ export function buildOutside() {
   };
 }
 
-// The gate: apron, terminal, jet bridge, vehicles (as before, with the new trees).
+// The gate: apron with markings, terminal with glass front and gate sign, jet bridge, the
+// planes at the neighbouring gates, ground crew who wave goodbye, vehicles, and the taxiway
+// ahead with blue edge lights and grass.
+function crewMember(vest = '#ff8a1f') {
+  const g = new THREE.Group();
+  const mat = (c) => lambert(c);
+  const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.14, 0.85, 8).translate(0, 0.43, 0), mat('#2b3442'));
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.18, 0.66, 10).translate(0, 1.18, 0), mat(vest));
+  const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.205, 0.205, 0.06, 10).translate(0, 1.05, 0), new THREE.MeshBasicMaterial({ color: '#e8eef2' }));
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8).translate(0, 1.66, 0), mat('#d9a98a'));
+  const muffs = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.03, 6, 12, Math.PI).rotateY(Math.PI / 2).translate(0, 1.68, 0), mat('#2a2d33'));
+  g.add(legs, body, stripe, head, muffs);
+  const arms = [];
+  for (const s of [-1, 1]) {
+    const sh = new THREE.Group();
+    sh.position.set(s * 0.25, 1.45, 0);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.6, 6).translate(0, -0.3, 0), mat(vest));
+    const wand = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.38, 6).translate(0, -0.75, 0), new THREE.MeshBasicMaterial({ color: '#ff5a1f' }));
+    sh.add(arm, wand);
+    sh.rotation.z = s * 0.15;
+    g.add(sh);
+    arms.push(sh);
+  }
+  g.userData.arms = arms;
+  return g;
+}
+
 function buildGate(gate, treeMat, pine) {
-  const bld = lambert('#d9dde2');
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), offsetMat(lambert('#ffffff', { map: concreteTexture(300) }), -1));
+  const R = rng(21);
+  // ---- apron: concrete, then grass where the apron ends
+  const apron = new THREE.Mesh(new THREE.PlaneGeometry(700, 600), offsetMat(lambert('#ffffff', { map: concreteTexture(88, 75) }), -1));
   apron.rotation.x = -Math.PI / 2;
-  apron.position.y = gy;
+  apron.position.set(-80, gy, -60);
   gate.add(apron);
-  const lead = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 160), offsetMat(lambert('#f2c230'), -3));
-  lead.rotation.x = -Math.PI / 2;
-  lead.position.set(CX, gy, -40);
-  gate.add(lead);
-  const stop = new THREE.Mesh(new THREE.PlaneGeometry(10, 0.3), offsetMat(lambert('#d9443a'), -3));
-  stop.rotation.x = -Math.PI / 2;
-  stop.position.set(CX - 6, gy, -36);
-  gate.add(stop);
-  const facadeTex = canvasTex(512, 256, (ctx, W, H) => {
-    ctx.fillStyle = '#e4e8ed';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#6f97b8';
-    ctx.fillRect(0, H * 0.25, W, H * 0.5);
-    ctx.strokeStyle = '#dfe5ea';
-    ctx.lineWidth = 4;
-    for (let x = 0; x < W; x += 32) {
-      ctx.beginPath();
-      ctx.moveTo(x, H * 0.25);
-      ctx.lineTo(x, H * 0.75);
-      ctx.stroke();
+  {
+    const t = texOf(makeMowedGrass(), { repeat: [2400 / 48, 2400 / 48] });
+    const grass = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), lambert('#ffffff', { map: t }));
+    grass.rotation.x = -Math.PI / 2;
+    grass.position.set(0, gy - 0.02, -600);
+    gate.add(grass);
+    // the taxiway we roll out on
+    const tw = new THREE.Mesh(new THREE.PlaneGeometry(26, 1800), offsetMat(lambert('#ffffff', { map: concreteTexture(2.6, 180) }), -1));
+    tw.rotation.x = -Math.PI / 2;
+    tw.position.set(CX, gy + 0.005, -1250);
+    gate.add(tw);
+  }
+  // ---- markings
+  const yel = [], red = [], wht = [];
+  const P = (arr, w, l, x, z, ry = 0) => arr.push(new THREE.PlaneGeometry(w, l).rotateX(-Math.PI / 2).rotateY(ry).translate(x, gy + 0.01, z));
+  P(yel, 0.3, 2200, CX, -1000); // lead-in / taxi centreline
+  for (const s of [-1, 1]) P(yel, 0.25, 1800, CX + s * 12.5, -1250); // taxiway edges
+  P(yel, 0.3, 120, CX, 60); // the neighbouring stand's lead-in line
+  for (const z0 of [-2, 62]) {
+    P(red, 0.25, 54, CX - 22, z0); // equipment restraint lines
+    P(red, 0.25, 54, CX + 22, z0);
+    P(red, 44, 0.25, CX, z0 + 27);
+    P(yel, 3.5, 0.35, CX - 2.2, z0 - 17.5); // stop bar
+  }
+  for (let z = -170; z < 140; z += 6) P(wht, 0.25, 3, CX - 32, z); // service road (dashed)
+  P(wht, 0.25, 310, CX - 37, -15);
+  const mk = (arr, c) => arr.length && gate.add(new THREE.Mesh(mergeGeometries(arr), offsetMat(lambert(c), -3)));
+  mk(yel, '#f2c230');
+  mk(red, '#d23b30');
+  mk(wht, '#eef0f0');
+  // painted stand number
+  {
+    const c = cnv(256, 128);
+    const x = c.getContext('2d');
+    x.fillStyle = '#f2c230';
+    x.font = '900 110px Arial, sans-serif';
+    x.textAlign = 'center';
+    x.textBaseline = 'middle';
+    x.fillText('7', 128, 68);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(6, 3), offsetMat(new THREE.MeshLambertMaterial({ map: texOf(c), transparent: true }), -3));
+    m.rotation.x = -Math.PI / 2;
+    m.rotation.z = Math.PI / 2;
+    m.position.set(CX - 9, gy + 0.01, -26);
+    gate.add(m);
+  }
+  // ---- taxiway edge lights (blue) and a sign
+  {
+    const blue = [];
+    const posts = new Batch();
+    const post = new THREE.CylinderGeometry(0.06, 0.08, 0.36, 6);
+    for (let z = -60; z > -2100; z -= 30)
+      for (const s of [-1, 1]) {
+        blue.push(CX + s * 13.5, gy + 0.42, z);
+        posts.add(post, '#cfd6dd', M4(CX + s * 13.5, gy + 0.18, z));
+      }
+    gate.add(lightPoints(blue, '#4f7dff', 0.9, 0.85));
+    const c = cnv(512, 128);
+    const x = c.getContext('2d');
+    x.fillStyle = '#111';
+    x.fillRect(0, 0, 256, 128);
+    x.fillStyle = '#f2c230';
+    x.fillRect(256, 0, 256, 128);
+    x.font = '800 80px Arial, sans-serif';
+    x.textAlign = 'center';
+    x.textBaseline = 'middle';
+    x.fillText('B', 128, 68);
+    x.fillStyle = '#111';
+    x.fillText('A ↑', 384, 68);
+    x.strokeStyle = '#f2c230';
+    x.lineWidth = 8;
+    x.strokeRect(12, 12, 232, 104);
+    const sm = new THREE.MeshLambertMaterial({ map: texOf(c), emissive: '#ffffff', emissiveMap: texOf(c), emissiveIntensity: 0.25, side: THREE.DoubleSide });
+    for (const z of [-260, -700]) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), sm);
+      m.position.set(CX - 19, gy + 0.95, z);
+      m.rotation.y = Math.PI / 2 - 0.35;
+      gate.add(m);
+      posts.add(new THREE.BoxGeometry(3.5, 0.95, 0.12), '#1b1e23', M4(CX - 19.05, gy + 0.95, z, Math.PI / 2 - 0.35));
+      for (const s of [-1, 1]) posts.add(new THREE.BoxGeometry(0.08, 0.5, 0.08), '#9aa1aa', M4(CX - 19, gy + 0.25, z + s * 1.3));
     }
-    ctx.fillStyle = 'rgba(40,60,80,0.35)';
-    const R = rng(9);
-    for (let i = 0; i < 40; i++) ctx.fillRect(R() * W, H * 0.55 + R() * 20, 4, 18);
-  }, { repeat: [6, 1] });
-  const tb = new THREE.Mesh(new THREE.BoxGeometry(60, 18, 260), [lambert('#ffffff', { map: facadeTex }), bld, bld, bld, bld, bld]);
-  tb.position.set(-70, gy + 9, -20);
-  gate.add(tb);
+    gate.add(posts.mesh());
+  }
+
+  // ---- terminal: glass front with lit interior, people, roof edge, rooftop units, gate sign
+  const bld = new Batch();
+  {
+    // 1024 px ≈ 33 m wide, 256 px = 18 m tall (≈14 px per metre)
+    const fac = cnv(1024, 256);
+    const x = fac.getContext('2d');
+    const m = 256 / 18;
+    const Y = (h) => 256 - h * m; // canvas y for a height above the ground
+    x.fillStyle = '#d6dbe1';
+    x.fillRect(0, 0, 1024, 256);
+    // upper floor: a band of windows (offices / lounge)
+    x.fillStyle = '#5f7d96';
+    x.fillRect(0, Y(13.2), 1024, 3.4 * m);
+    x.fillStyle = 'rgba(255,255,255,0.18)';
+    for (let i = 0; i < 1024; i += 48) x.fillRect(i + 4, Y(13.2) + 3, 18, 3.4 * m - 6);
+    x.fillStyle = '#c9cfd6';
+    for (let i = 0; i <= 1024; i += 48) x.fillRect(i - 2, Y(13.2), 4, 3.4 * m);
+    // departure hall: tall glass from 0.6 m to 7 m
+    const g0 = Y(7), g1 = Y(0.6);
+    const gr = x.createLinearGradient(0, g0, 0, g1);
+    gr.addColorStop(0, '#7f9db6');
+    gr.addColorStop(0.6, '#a9bac7');
+    gr.addColorStop(1, '#dcd0b6');
+    x.fillStyle = gr;
+    x.fillRect(0, g0, 1024, g1 - g0);
+    x.fillStyle = 'rgba(255,244,214,0.8)';
+    for (let i = 0; i < 1024; i += 40) x.fillRect(i + 10, g0 + 4, 20, 3); // ceiling lights
+    // rows of seats and people waiting at the window (1.1–1.85 m tall)
+    x.fillStyle = 'rgba(40,60,90,0.55)';
+    for (let i = 0; i < 1024; i += 9) x.fillRect(i, g1 - 0.8 * m, 6, 0.8 * m);
+    const RR = rng(5);
+    for (let i = 0; i < 70; i++) {
+      const px = RR() * 1020, h = (RR() < 0.25 ? 1.1 + RR() * 0.3 : 1.55 + RR() * 0.3) * m, w = h * 0.28;
+      x.fillStyle = ['#3d4a5c', '#6b3b3b', '#2f5d50', '#5a4b7a', '#7a6a3b', '#b0574a'][Math.floor(RR() * 6)];
+      x.fillRect(px - w / 2, g1 - h * 0.86, w, h * 0.86);
+      x.fillStyle = '#c79a7c';
+      x.beginPath();
+      x.arc(px, g1 - h * 0.92, w * 0.33, 0, Math.PI * 2);
+      x.fill();
+    }
+    x.fillStyle = 'rgba(255,255,255,0.13)';
+    x.beginPath();
+    x.moveTo(60, g0);
+    x.lineTo(300, g0);
+    x.lineTo(180, g1);
+    x.lineTo(0, g1);
+    x.fill();
+    x.fillStyle = '#e9edf1';
+    for (let i = 0; i <= 1024; i += 32) x.fillRect(i - 1.5, g0, 3, g1 - g0);
+    x.fillRect(0, Y(3.6), 1024, 3);
+    x.fillStyle = '#9aa3ad';
+    x.fillRect(0, g1, 1024, 256 - g1);
+    x.fillRect(0, Y(7.6), 1024, 0.6 * m);
+    const tex = texOf(fac, { repeat: [9, 1] });
+    const tb = new THREE.Mesh(new THREE.BoxGeometry(60, 18, 300), [lambert('#ffffff', { map: tex }), lambert('#d3d8de'), lambert('#9aa3ad'), lambert('#d3d8de'), lambert('#d3d8de'), lambert('#d3d8de')]);
+    tb.position.set(-70, gy + 9, -10);
+    gate.add(tb);
+    bld.add(new THREE.BoxGeometry(62, 1.0, 302), '#aeb6bf', M4(-70, gy + 18.5, -10)); // roof edge
+    for (let z = -130; z < 120; z += 45) bld.add(new THREE.BoxGeometry(7, 2.6, 9), '#c3c9cf', M4(-76, gy + 20, z));
+    // the round jet-bridge rotunda at each gate
+    for (const z of [-9.4, 54.6, -120]) {
+      bld.add(new THREE.CylinderGeometry(2.4, 2.4, 3.4, 16), '#c9ced5', M4(-38.2, FLOOR + 1.25, z));
+      bld.add(new THREE.CylinderGeometry(0.5, 0.6, FLOOR + 1.25 - gy - 1.7, 8), '#7d8692', M4(-38.2, (FLOOR + 1.25 - 1.7 + gy) / 2, z));
+    }
+    // gate number sign on the bridge rotunda
+    const c = cnv(256, 128);
+    const sx = c.getContext('2d');
+    sx.fillStyle = '#163a5f';
+    sx.fillRect(0, 0, 256, 128);
+    sx.fillStyle = '#ffffff';
+    sx.font = '800 88px Arial, sans-serif';
+    sx.textAlign = 'center';
+    sx.textBaseline = 'middle';
+    sx.fillText('7', 128, 70);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), new THREE.MeshLambertMaterial({ map: texOf(c), emissive: '#ffffff', emissiveMap: texOf(c), emissiveIntensity: 0.3 }));
+    sign.position.set(-35.7, FLOOR + 3.6, -9.4);
+    sign.rotation.y = Math.PI / 2;
+    gate.add(sign);
+    // control tower further along
+    bld.add(new THREE.CylinderGeometry(2.4, 3.6, 34, 14), '#e3e6ea', M4(-190, gy + 17, -420));
+    bld.add(new THREE.CylinderGeometry(6.4, 5.0, 2.2, 16), '#cfd4da', M4(-190, gy + 35, -420));
+    bld.add(new THREE.CylinderGeometry(6.0, 6.0, 3.4, 16), '#2f5068', M4(-190, gy + 37.8, -420));
+    bld.add(new THREE.CylinderGeometry(7.0, 6.4, 0.8, 16), '#e3e6ea', M4(-190, gy + 39.9, -420));
+    // hangar
+    bld.add(new THREE.BoxGeometry(70, 18, 64), '#c6ccd3', M4(-170, gy + 9, -620));
+    bld.add(new THREE.CylinderGeometry(32, 32, 70, 18, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).scale(1, 0.32, 1), '#8f99a5', M4(-170, gy + 18, -620));
+    // cones around the neighbouring planes
+    const cone = new THREE.ConeGeometry(0.18, 0.7, 8).translate(0, 0.35, 0);
+    for (const z0 of [62]) for (const [dx, dz] of [[0, -20], [-18.5, 7], [18.5, 7], [0, 17]]) bld.add(cone, '#ff6a1a', M4(CX + dx, gy, z0 + dz));
+  }
+  // ---- the plane at the gate behind ours (the way ahead stays clear for taxiing)
+  {
+    const parked = new THREE.Group();
+    [['#c0392b', 62]].forEach(([tail, z]) => {
+      const a = makeAirliner({ tail, withGear: true });
+      a.group.position.set(CX, W_FUSE_Y, z);
+      parked.add(a.group);
+      // their jet bridges, docked
+      const len = 38.2 - 2.6;
+      bld.add(new THREE.BoxGeometry(len, 2.5, 2.6), '#d0d5db', M4(-38.2 + 2.4 + len / 2 - 2.4, FLOOR + 1.25, z - 7.4));
+      bld.add(new THREE.BoxGeometry(2.4, 2.9, 3.4), '#bfc6ce', M4(-1.95, FLOOR + 1.25, z - 7.4));
+      bld.add(new THREE.BoxGeometry(0.4, FLOOR + 1.25 - 1.25 - gy, 0.4), '#6d7480', M4(-8, (FLOOR + gy) / 2, z - 7.4));
+      bld.add(new THREE.BoxGeometry(1.8, 0.6, 0.8), '#2b2f36', M4(-8, gy + 0.3, z - 7.4));
+    });
+    gate.add(bakeStatic(parked));
+  }
+  // ---- our own jet bridge (moves)
   const bridgeY = FLOOR + 1.25;
   const tunnelZ = -9.4;
-  const bridge = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 2.6), lambert('#d0d5db'));
+  const bridgeMat = lambert('#d0d5db');
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 2.6), bridgeMat);
   const bridgeCab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.9, 3.4), lambert('#bfc6ce'));
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.7, 3.0), lambert('#2a2e34'));
   const leg = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1, 0.4), lambert('#6d7480'));
   const wheels = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 0.8), lambert('#2b2f36'));
-  gate.add(bridge, bridgeCab, leg, wheels);
+  const bridgeLamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: '#ffb02e' }));
+  gate.add(bridge, bridgeCab, canopy, leg, wheels, bridgeLamp);
   const setBridge = (xEnd) => {
-    const x0 = -40;
+    const x0 = -36;
     const len = xEnd - x0 - 1.2;
     bridge.scale.x = len;
     bridge.position.set(x0 + len / 2, bridgeY, tunnelZ);
     bridgeCab.position.set(xEnd - 1.2, bridgeY, tunnelZ);
+    canopy.position.set(xEnd + 0.1, bridgeY, tunnelZ);
+    canopy.visible = xEnd < -1.5;
     const lx = xEnd - 7;
     leg.scale.y = bridgeY - 1.25 - gy;
     leg.position.set(lx, (bridgeY - 1.25 + gy) / 2, tunnelZ);
     wheels.position.set(lx, gy + 0.3, tunnelZ);
+    bridgeLamp.position.set(xEnd - 1.2, bridgeY + 1.55, tunnelZ);
   };
   setBridge(-0.75);
+  // ---- vehicles
   const tug = new THREE.Group();
   const tugBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.0, 2.6), lambert('#f2b632'));
   tugBody.position.y = 0.8;
   tug.add(tugBody);
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.9, 0.8), lambert('#3a3f47'));
+  seat.position.set(0, 1.6, 0.6);
+  tug.add(seat);
   const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), new THREE.MeshBasicMaterial({ color: '#ff9d00' }));
-  beacon.position.set(0, 1.4, 0.4);
+  beacon.position.set(0, 2.15, 0.6);
   tug.add(beacon);
-  for (let c = 1; c <= 3; c++) {
-    const cart = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 2.4), lambert('#7d8a99'));
-    cart.position.set(0, 0.9, c * 3.0);
-    tug.add(cart);
-    const bags = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 2.0), lambert(['#c0392b', '#2e86de', '#27ae60'][c - 1]));
-    bags.position.set(0, 1.6, c * 3.0);
-    tug.add(bags);
+  const wheelGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.25, 12).rotateZ(Math.PI / 2);
+  const wheelMat = lambert('#1f2226');
+  for (let c = 0; c <= 3; c++) {
+    if (c) {
+      const cart = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 2.4), lambert('#7d8a99'));
+      cart.position.set(0, 0.7, c * 3.0);
+      tug.add(cart);
+      const bags = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 2.0), lambert(['#c0392b', '#2e86de', '#27ae60'][c - 1]));
+      bags.position.set(0, 1.15, c * 3.0);
+      tug.add(bags);
+    }
+    for (const sx of [-0.8, 0.8])
+      for (const dz of [-0.8, 0.8]) {
+        const w = new THREE.Mesh(wheelGeo, wheelMat);
+        w.position.set(sx, 0.32, c * 3.0 + dz);
+        tug.add(w);
+      }
   }
   tug.position.set(-14, gy, 0);
   gate.add(tug);
@@ -950,6 +1206,12 @@ function buildGate(gate, treeMat, pine) {
   const tcab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.0, 1.8), lambert('#2e6fb5'));
   tcab.position.set(0, 1.4, -3.2);
   truck.add(tank, tcab);
+  for (const sx of [-1, 1]) for (const z of [-3, 1.5, 3]) {
+    const w = new THREE.Mesh(wheelGeo, wheelMat);
+    w.scale.set(1.3, 1.5, 1.5);
+    w.position.set(sx * 1.05, 0.48, z);
+    truck.add(w);
+  }
   truck.position.set(-22, gy, 14);
   truck.rotation.y = 0.5;
   gate.add(truck);
@@ -957,14 +1219,60 @@ function buildGate(gate, treeMat, pine) {
   loader.position.set(-2.6, gy + 1.6, 9);
   loader.rotation.x = 0.28;
   gate.add(loader);
-  gate.add(mountainRange(8, gy - 10, { r0: 4200, r1: 7600, hMax: 1000 }));
-  const R = rng(21);
+  gate.add(bld.mesh());
+  // ---- ground crew: one by the nose with wands, two by the wing
+  const crew = [crewMember('#ff8a1f'), crewMember('#d6f23a'), crewMember('#ff8a1f')];
+  crew[0].position.set(CX - 9, gy, -24);
+  crew[0].rotation.y = -Math.PI / 2 + 0.5;
+  crew[1].position.set(-13, gy, -6);
+  crew[1].rotation.y = -Math.PI / 2 + 0.2;
+  crew[2].position.set(-16, gy, -3.5);
+  crew[2].rotation.y = -Math.PI / 2 - 0.1;
+  crew.forEach((c) => gate.add(c));
+
+  const mountG = mountainRange(8, gy - 10, { r0: 4800, r1: 7600, hMax: 900 });
+  gate.add(mountG);
   const pts = [];
   while (pts.length < 900) {
-    const x = -1100 + R() * 2200, z = -1100 + R() * 2200;
-    if (Math.abs(x) < 420 && Math.abs(z) < 520) continue;
+    const x = -1100 + R() * 2200, z = -1300 + R() * 2400;
+    if (x > -460 && x < 330 && z > -420 && z < 300) continue;
+    if (Math.abs(x - CX) < 60 && z < -300) continue; // keep the taxiway clear
     pts.push({ x, y: gy, z, s: 11 + R() * 12, w: 1, rot: R() * 6, c: new THREE.Color().setHSL(0.3 + R() * 0.05, 0.4, 0.22 + R() * 0.08) });
   }
   gate.add(forest(pts, pine, treeMat));
-  return { setBridge, tug, beacon };
+
+  // wave: seconds since the crew started waving (<0 = not waving); away: seconds since the tug left
+  const tugHome = tug.position.clone();
+  const updateGate = (T, { wave = -1, away = -1, boarding = false } = {}) => {
+    beacon.visible = T % 1 < 0.5;
+    bridgeLamp.visible = T % 0.8 < 0.4 && bridge.scale.x < 33;
+    if (boarding) {
+      tug.position.copy(tugHome);
+      tug.position.z = 30 - ((T * 2.2) % 70);
+      tug.rotation.y = 0;
+    } else if (away >= 0) {
+      // drive off toward the end of the terminal
+      const d = away * 3.5;
+      tug.position.set(tugHome.x - Math.min(10, d * 0.4), gy, tugHome.z + 6 - d);
+      tug.rotation.y = -Math.min(0.4, d * 0.02);
+    }
+    crew.forEach((c, i) => {
+      const [l, r] = c.userData.arms;
+      if (wave >= 0 && wave < 30) {
+        const k = Math.min(1, wave / 0.8);
+        const w = Math.sin((wave + i * 0.4) * 5.5);
+        r.rotation.z = -(2.5 + 0.35 * w) * k - 0.15 * (1 - k);
+        r.rotation.x = 0;
+        l.rotation.z = i === 0 ? (2.5 - 0.35 * w) * k : 0.15;
+      } else if (i === 0) {
+        // marshaller: wands held up, waiting
+        r.rotation.z = -0.8;
+        l.rotation.z = 0.8;
+      } else {
+        r.rotation.z = -0.15;
+        l.rotation.z = 0.15;
+      }
+    });
+  };
+  return { setBridge, tug, beacon, updateGate, mountG };
 }

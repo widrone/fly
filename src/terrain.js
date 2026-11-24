@@ -30,7 +30,7 @@ export function periodicNoise(cells, seed) {
 
 // ------------------------------------------------------------------ mountains
 // A ring of mountains as one height field: forested slopes, grey rock, snow on the tops.
-export function mountainRange(seed, y, { r0 = 4800, r1 = 8200, cx = 0, cz = 0, hMax = 900, segs = 640, rings = 22 } = {}) {
+export function mountainRange(seed, y, { r0 = 4800, r1 = 7600, cx = 0, cz = 0, hMax = 900, segs = 640, rings = 22, haze = '#cde4fb' } = {}) {
   const nA = periodicNoise(24, seed), nB = periodicNoise(64, seed + 1), nC = periodicNoise(160, seed + 2);
   const ridged = (v) => 1 - Math.abs(2 * v - 1);
   const pos = [], col = [], idx = [];
@@ -62,33 +62,35 @@ export function mountainRange(seed, y, { r0 = 4800, r1 = 8200, cx = 0, cz = 0, h
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
+  // Colours are baked with their own light and haze (aerial perspective): the foot of each
+  // mountain melts into the horizon colour, the tops stay a soft blue-grey, snow stays bright.
+  // No scene fog, so they never turn into dark shapes floating over a white band.
   const nrm = geo.attributes.normal;
-  const forest = new THREE.Color('#2a4a2f'), rock = new THREE.Color('#6a7377'), rockD = new THREE.Color('#4a5257'), snow = new THREE.Color('#f4f7fa');
+  const forest = new THREE.Color('#58705f'), rock = new THREE.Color('#828d97'), snow = new THREE.Color('#f6f8fb');
+  const hazeC = new THREE.Color(haze);
+  const L = new THREE.Vector3(0.3, 0.85, 0.42).normalize();
   const R = rng(seed + 9);
   const c = new THREE.Color();
+  const top = hMax * 1.35;
   for (let k = 0; k < H.length; k++) {
     const h = H[k];
+    const j = Math.floor(k / (segs + 1)), t = j / rings;
     const up = nrm.getY(k);
     const jitter = (R() - 0.5) * 90;
-    const treeLine = 380 + jitter, snowLine = 720 + jitter * 1.5;
+    const treeLine = 360 + jitter, snowLine = 700 + jitter * 1.5;
     c.copy(forest);
-    if (h > treeLine - 120) c.lerp(up > 0.8 ? rock : rockD, THREE.MathUtils.smoothstep(h, treeLine - 120, treeLine + 60));
-    if (h > snowLine - 60 && up > 0.55) c.lerp(snow, THREE.MathUtils.smoothstep(h, snowLine - 60, snowLine + 80) * THREE.MathUtils.smoothstep(up, 0.55, 0.75));
+    if (h > treeLine - 120) c.lerp(rock, THREE.MathUtils.smoothstep(h, treeLine - 120, treeLine + 60));
+    let sn = 0;
+    if (h > snowLine - 60 && up > 0.5) sn = THREE.MathUtils.smoothstep(h, snowLine - 60, snowLine + 80) * THREE.MathUtils.smoothstep(up, 0.5, 0.72);
+    c.lerp(snow, sn);
+    const lit = 0.72 + 0.42 * Math.max(0, nrm.getX(k) * L.x + nrm.getY(k) * L.y + nrm.getZ(k) * L.z);
+    c.multiplyScalar(lit);
+    const foot = 1 - THREE.MathUtils.smoothstep(h, 0, top * 0.5);
+    const hz = Math.min(1, 0.32 + 0.14 * t + 0.66 * foot - 0.12 * sn);
+    c.lerp(hazeC, hz);
     col.push(c.r, c.g, c.b);
   }
   geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  // the fog sees the mountains as nearer than they are, so they keep some colour in the haze
-  // (inside a cloud the fog is so thick that they still disappear)
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  mat.onBeforeCompile = (sh) => {
-    // full haze at the foot (like the ground in front), clearer toward the tops
-    sh.vertexShader = sh.vertexShader.replace(
-      '#include <fog_vertex>',
-      `#ifdef USE_FOG
-        vFogDepth = - mvPosition.z * mix(1.0, 0.55, clamp((position.y - (${y.toFixed(2)})) / ${(hMax * 0.7).toFixed(1)}, 0.0, 1.0));
-      #endif`
-    );
-  };
-  mat.customProgramCacheKey = () => 'mountains';
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false });
   return new THREE.Mesh(geo, mat);
 }

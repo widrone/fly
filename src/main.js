@@ -5,6 +5,8 @@ import { Panel } from './ui.js';
 import * as W from './world.js';
 import { buildCabin } from './cabin.js';
 import { buildOutside } from './ground.js';
+import { buildSafety } from './safety.js';
+import { wingVapour, cloudWisps } from './details.js';
 import { setExteriorEnv, makeSkyEnv } from './aircraft.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { LANGS, pickLanguage } from './i18n.js';
@@ -58,8 +60,14 @@ scene.add(terminal.group);
 const cabin = buildCabin(cabinEnv);
 const plane = W.makeAirliner({ withGear: false });
 plane.group.position.set(W.CX, W.FUSE_Y, -2);
+const safety = buildSafety();
 const cabinRoot = new THREE.Group();
-cabinRoot.add(cabin.group, plane.group);
+cabinRoot.add(cabin.group, plane.group, safety.group);
+const vapour = wingVapour();
+plane.wings[0].group.add(vapour.mesh);
+const wisps = cloudWisps();
+cabinRoot.add(wisps.points);
+const wx = { frost: 0, wet: 0, vap: 0 }; // window frost, raindrops, wing vapour
 scene.add(cabinRoot);
 const SUN_DIR = new THREE.Vector3(0.55, 0.62, -0.55).normalize(); // sun to the front right, so the plane's shadow falls on the left
 setExteriorEnv(makeSkyEnv(renderer, { sun: SUN_DIR.toArray() }));
@@ -84,7 +92,7 @@ fade.renderOrder = 1000;
 scene.add(fade);
 
 // ------------------------------------------------------------ scene presets
-const DAY = { top: '#3b7ad6', hor: '#cde4fb', bot: '#d9e6f1', sunDir: [-0.5, 0.7, -0.5], sunCol: '#fff2d6' };
+const DAY = { top: '#3b7ad6', hor: '#cde4fb', bot: '#cde4fb', sunDir: [-0.5, 0.7, -0.5], sunCol: '#fff2d6' };
 const PRESETS = {
   lounge: {
     sky: { top: '#2e3878', hor: '#ffc4a6', bot: '#f3bccb', sunDir: [0.55, 0.06, -0.83], sunCol: '#ffd2a3' },
@@ -215,9 +223,15 @@ function applySetup(key, hard) {
     F.rev = F.revT = 0;
     F.nL = F.nR = F.nLT = F.nRT = S.eng ?? 1;
     F.apu = F.apuT = S.apu ?? 0;
-    if (S.outside === 'gate') outside.setBridge(-0.75);
+    if (S.outside === 'gate') {
+      outside.setBridge(-0.75);
+      gateAnim.wave = gateAnim.away = -1;
+    }
   }
   F.mode = S.outside;
+  wx.frost = S.alt > 500 ? 0.55 : 0;
+  wx.wet = 0;
+  wx.vap = 0;
   F.target = { alt: S.alt, v: S.v };
   F.manual = false;
   F.engineT = S.engine;
@@ -336,6 +350,8 @@ function updateFlight(dt) {
   outside.setScroll(az);
   outside.setShadow(F.alt + 3.3 - F.bumpY * 1.7, SUN_DIR);
   outside.update(dt, T);
+  safety.update(dt, T);
+  outside.setSkyAlt(F.alt, F.dist);
   outside.airport.visible = F.mode !== 'gate' && az > -12000 && az < 12000;
   outside.airport.position.z = az;
   const TL = outside.TL;
@@ -344,11 +360,7 @@ function updateFlight(dt) {
     z = ((((z + 1.5 * TL) % (3 * TL)) + 3 * TL) % (3 * TL)) - 1.5 * TL;
     tile.position.z = z;
   }
-  outside.beacon.visible = (T % 1) < 0.5;
-  if (F.mode === 'gate') {
-    const a = T * 0.06;
-    outside.tug.position.z = 30 - ((T * 2.2) % 70);
-  }
+  if (F.mode === 'gate') outside.updateGate(T, { wave: gateAnim.wave, away: gateAnim.away, boarding: !seq });
 
   // inside the cloud layer everything turns soft white
   const c = clamp(Math.min((F.alt - (W.CLOUD_ALT - 50)) / 28, (W.CLOUD_ALT + 50 - F.alt) / 28), 0, 1);
@@ -357,6 +369,18 @@ function updateFlight(dt) {
   scene.fog.color.copy(baseFog.color).lerp(new THREE.Color('#eef2f6'), c);
   sky.uniforms.white.value = c;
   cabin.setSun(1 - c);
+  // details: frost creeps over the windows at cruising height and melts on the way down,
+  // raindrops from the cloud streak backwards and dry, mist flows over the wing when it's
+  // working hard near the ground, and cloud wisps rush past near the cloud layer
+  const high = F.mode !== 'gate' && F.alt > W.CLOUD_ALT + 120;
+  wx.frost = clamp(wx.frost + (high ? dt / 45 : -dt / 20), 0, 1);
+  wx.wet = clamp(wx.wet + (c > 0.15 ? dt / 2.5 : -dt / (F.v > 30 ? 18 : 40)), 0, 1);
+  cabin.setWindow(wx.frost, wx.wet, F.v * dt * 0.004, 1 - 0.25 * c);
+  const lowWork = F.mode !== 'gate' && F.alt > 0.5 && F.alt < 260 && F.flaps > 0.3 ? Math.pow(1 - F.alt / 260, 0.6) : 0;
+  wx.vap += clamp(Math.max(lowWork * 0.9, c * 0.7) - wx.vap, -dt * 0.8, dt * 0.8);
+  vapour.set(wx.vap, dt);
+  const near = F.mode !== 'gate' ? clamp(1 - Math.abs(F.alt - W.CLOUD_ALT) / 90, 0, 1) : 0;
+  wisps.update(near * (1 - 0.55 * c) * 0.9, F.v, dt);
   hemi.intensity = lerp(1.15, 0.9, c);
 
   F.rev += clamp(F.revT - F.rev, -dt / 1.5, dt / 1.5);
@@ -391,7 +415,7 @@ function soundState() {
     rough: inCabin ? F.rough : 0,
     apu: F.apu,
     life: F.life * (1 - Math.min(1, F.engine * 1.2)),
-    phase: F.mode === 'gate' && !seq ? 'boarding' : F.mode === 'air' && F.alt > 500 && !seq ? 'cruise' : 'none',
+    phase: F.mode === 'gate' && !seq ? 'boarding' : F.alt < 0.3 && F.v > 1 && F.v < 15 ? 'taxi' : F.mode === 'air' && F.alt > 500 && !seq ? 'cruise' : 'none',
   };
 }
 
@@ -477,6 +501,11 @@ const STEPS = [
   { id: 'seat2', setup: 'gate', progress: 0.15, buttons: [['buckle', 'buckle']] },
   { id: 'seat3', setup: 'gateBelt', progress: 0.17, onEnter: () => sound.ding() },
   { id: 'seat4', setup: 'gateBelt', progress: 0.19 },
+  { id: 'safety0', setup: 'gateBelt', progress: 0.195, buttons: [['skip', 'skipSafety', 'secondary'], ['watchDemo', 'next']] },
+  { id: 'safety', setup: 'gateBelt', progress: 0.198, seq: 'safety', resumeTo: 'safety0' },
+  { id: 'safety2', setup: 'gateBelt', progress: 0.2, buttons: [['noThanks', 'skipSafety', 'secondary'], ['tryIt', 'next']] },
+  { id: 'safetyTry', setup: 'gateBelt', progress: 0.203, tryIt: true, resumeTo: 'safety2', buttons: [['skip', 'skipSafety', 'secondary']] },
+  { id: 'safetyDone', setup: 'gateBelt', progress: 0.206, onEnter: () => sound.celebrate(), buttons: [['onward', 'next']] },
   { id: 'taxi0', setup: 'gateBelt', progress: 0.21, buttons: [['taxi', 'next']] },
   { id: 'taxi', setup: 'gateBelt', progress: 0.24, seq: 'taxi', resumeTo: 'taxi0' },
 
@@ -507,6 +536,8 @@ let cur = -1;
 let busy = false;
 let breakReturn = 'welcome';
 let seq = null;
+let tryState = null; // the "try it yourself" safety missions
+const gateAnim = { wave: -1, away: -1 }; // ground crew waving, baggage tug leaving
 
 const words = (id) => L.steps[id] || {};
 function stepContent(st, extra = {}) {
@@ -529,7 +560,7 @@ function stepContent(st, extra = {}) {
 }
 
 function say(title, text) {
-  voice.say([title, text].filter(Boolean).join('. '));
+  return voice.say([title, text].filter(Boolean).join('. '));
 }
 
 async function go(id, { instant = false } = {}) {
@@ -544,6 +575,8 @@ async function go(id, { instant = false } = {}) {
   timers.length = 0;
   bumps.list.length = 0;
   voice.stop();
+  safety.reset();
+  tryState = null;
   const S = SETUPS[st.setup];
   const needFade = !instant && S.scene !== sceneName;
   if (needFade) {
@@ -552,7 +585,9 @@ async function go(id, { instant = false } = {}) {
   applySetup(st.setup, needFade || instant || setupKey === null);
   cur = i;
   if (st.onEnter) st.onEnter();
-  if (st.seq) {
+  if (st.tryIt) {
+    startTry();
+  } else if (st.seq) {
     startSeq(st.seq);
   } else if (st.breathe) {
     const base = stepContent(st);
@@ -585,6 +620,8 @@ function action(a) {
   }
   if (a === 'resume') return go(breakReturn);
   if (a === 'restart') return go('gate1');
+  if (a === 'skipSafety') return go('taxi0');
+  if (a === 'replayHit') return;
   if (a === 'free') return go('free');
   if (a === 'exit') return exitExperience();
   if (a === 'breathe3') {
@@ -622,103 +659,182 @@ function cap(key) {
   panel.set({ title, text, buttons: [], calm: true, progress: st.progress });
   caption.set({ title, text, textSize: 44, titleSize: 64 });
   caption.mesh.visible = true;
-  say(title, text);
+  const d = say(title, text);
   nimbus.talk();
+  return d; // seconds it takes to say
 }
 
 function startSeq(name) {
-  const s = { t: 0, events: [], tick: () => {}, done: false };
+  const s = { t: 0, events: [], chain: [], capQ: [], ready: 0, busy: 0, tick: () => {}, done: false };
   const at = (t, fn) => s.events.push({ t, fn });
   const when = (cond, fn) => s.events.push({ cond, fn });
+  // then(gap, fn): runs `gap` seconds after the previous chained step has finished; fn returns
+  // how long its step lasts (usually how long Nimbus speaks), so nothing talks over anything.
+  const then = (gap, fn) => s.chain.push({ gap, fn });
+  // talk(key): show and say a caption now; nothing else in the sequence speaks until it's done
+  const talk = (key, force = false) => {
+    const d = cap(key);
+    s.busy = force ? s.t + d : Math.max(s.busy, s.t + d);
+    return d;
+  };
+  // queue(key, stale, after): say it as soon as Nimbus is free; skip it if `stale()` says
+  // the moment has passed (e.g. we're already out of the cloud)
+  const queue = (key, stale = null, after = null) => s.capQ.push({ key, stale, after });
   if (name === 'taxi') {
+    // Calm pace: every step waits until Nimbus has finished, then a breather.
     F.manual = true;
-    at(0, () => {
+    let bridgeT = -1, tugT = -1, waveT = -1, rollT = -1;
+    then(0.6, () => {
       sound.door();
       buzz(0.4, 120, 0.85);
-      cap('doorClosed');
+      return Math.max(3, cap('doorClosed'));
     });
-    at(5, () => {
+    then(0.8, () => {
+      bridgeT = s.t;
+      sound.bridge(6);
+      return 6.5;
+    });
+    then(0.5, () => {
+      tugT = s.t;
+      sound.tugAway();
+      sound.paChime();
+      return 3;
+    });
+    then(0.5, () => {
       sound.engineStart('R');
       F.nRT = 1;
-      cap('engineOne');
+      return Math.max(8, cap('engineOne'));
     });
-    at(10.5, () => {
+    then(2, () => {
       sound.engineStart('L');
       F.nLT = 1;
-      cap('engineTwo');
+      return Math.max(8, cap('engineTwo'));
     });
-    at(16, () => {
+    then(1.5, () => {
       F.apuT = 0;
-      F.engineT = 0.2;
-      cap('rolling');
+      waveT = s.t; // the ground crew wave goodbye
+      return 3.5;
     });
-    at(22, () => {
+    then(0, () => {
+      F.engineT = 0.22;
+      rollT = s.t;
+      sound.brakeRelease();
+      return Math.max(6, cap('rolling'));
+    });
+    then(3, () => {
       setFlaps(0.45);
-      cap('flapsOut');
+      return Math.max(6, cap('flapsOut'));
     });
-    at(29, () => go('takeoff0'));
+    then(4, () => go('takeoff0'));
     s.tick = (t) => {
-      outside.setBridge(lerp(-0.75, -24, smooth((t - 0.8) / 4)));
-      F.v = t > 16.5 ? Math.min(5, (t - 16.5) * 1.1) : 0;
+      outside.setBridge(bridgeT < 0 ? -0.75 : lerp(-0.75, -24, smooth((t - bridgeT) / 6)));
+      gateAnim.away = tugT < 0 ? -1 : t - tugT;
+      gateAnim.wave = waveT < 0 ? -1 : t - waveT;
+      // ease away gently (after the first push of thrust), and settle at a walking-bus pace
+      F.v = rollT < 0 ? 0 : 4.5 * smooth((t - rollT - 1.2) / 10);
+      if (rollT >= 0 && F.v > 3.5) F.engineT = 0.12;
     };
   }
+  if (name === 'safety') {
+    const crewSay = (key, hl, extra) => () => {
+      safety.highlight(hl);
+      if (extra) extra();
+      const d = crew(key);
+      s.busy = s.t + d;
+      return d;
+    };
+    then(0.4, () => {
+      sound.paChime();
+      return 1.6;
+    });
+    then(0, crewSay('welcome', []));
+    then(0.6, crewSay('belt', ['belt']));
+    then(0.6, crewSay('exits', ['exit'], () => safety.lights(true)));
+    then(0.6, crewSay('oxygen', ['psu'], () => safety.lights(false)));
+    then(0.5, () => {
+      safety.highlight([]);
+      return talk('safeOxy');
+    });
+    then(0.6, crewSay('vest', ['vest']));
+    then(0.6, crewSay('card', ['card']));
+    then(0.6, () => {
+      safety.highlight([]);
+      return talk('safeEnd');
+    });
+    then(1.2, () => go('safety2'));
+  }
   if (name === 'takeoff') {
+    // Nimbus is never cut off: the brakes are held until he has explained, the plane only
+    // lifts off once "faster and faster" is finished, and the next things wait their turn.
     F.manual = true;
     F.rwZ0 = -F.dist;
-    let climb = 0;
-    let doneAt = Infinity;
-    at(0, () => {
+    let climb = 0, rollT = -1, rotate = false, airT = -1, fasterDone = Infinity, doneAt = Infinity;
+    then(0.3, () => {
       F.engineT = 1;
-      cap('hereWeGo');
+      return talk('hereWeGo');
     });
-    at(7, () => cap('faster'));
-    at(16, () => cap('liftOff'));
-    at(21, () => {
-      gearUp();
-      cap('gearUp');
+    then(0.8, () => {
+      rollT = s.t; // brakes off
+      return 2;
     });
-    at(28, () => {
-      F.engineT = 0.7;
-      cap('quieter');
+    then(0, () => {
+      const d = talk('faster');
+      fasterDone = s.t + d + 0.5;
+      return d;
     });
-    at(31, () => setFlaps(0));
-    when(() => F.alt >= W.CLOUD_ALT - 48, () => cap('intoCloud'));
-    when(() => F.alt >= W.CLOUD_ALT + 52, () => {
-      cap('aboveClouds');
-      doneAt = s.t + 6;
+    when(() => rotate, () => {
+      airT = s.t;
+      then(0, () => talk('liftOff'));
+      then(1, () => {
+        gearUp();
+        return talk('gearUp');
+      });
+      then(2, () => {
+        F.engineT = 0.7;
+        later(3, () => setFlaps(0));
+        return talk('quieter');
+      });
     });
+    when(() => F.alt >= W.CLOUD_ALT - 48, () => queue('intoCloud', () => F.alt > W.CLOUD_ALT + 30));
+    when(() => F.alt >= W.CLOUD_ALT + 52, () => queue('aboveClouds', null, () => (doneAt = s.busy + 3)));
     when(() => s.t > doneAt, () => go('cruise1'));
     s.tick = (t, dt) => {
-      if (t > 2.5) F.v = Math.min(78, F.v + 5.2 * dt);
-      if (t > 16) {
-        climb = Math.min(18, climb + 4.5 * dt);
-        F.alt += climb * dt;
+      if (rollT >= 0 && !rotate) F.v = Math.min(78, F.v + 5.2 * dt);
+      if (!rotate && F.v >= 70 && t >= fasterDone) rotate = true;
+      if (rotate) {
+        F.v = Math.min(78, F.v + 2 * dt);
+        climb = Math.min(12, climb + 4.5 * dt);
+        F.alt = Math.min(700, F.alt + climb * dt);
       }
     };
   }
   if (name === 'landing') {
+    // A longer, gentler approach (about a minute) so every line fits; the wheels, flaps and
+    // touchdown keep their fixed places on the glide path and the words line up behind them.
     F.manual = true;
+    const TD = 66; // seconds to touchdown
     const a0 = F.alt;
     F.v = 65;
-    F.rwZ0 = 400 - F.dist - 65 * 44;
+    F.rwZ0 = 400 - F.dist - 65 * TD;
     F.engineT = 0.25;
+    let stopped = false;
     at(0, () => {
       sound.ding();
       cabin.setSign(true);
-      cap('glide');
     });
-    at(8, () => {
+    then(0.5, () => talk('glide'));
+    then(1.5, () => {
       setFlaps(0.5);
-      cap('flapsLand');
+      return talk('flapsLand');
     });
-    when(() => F.alt < W.CLOUD_ALT + 48, () => cap('backThrough'));
-    when(() => F.alt < W.CLOUD_ALT - 80, () => cap('ground'));
-    at(29, () => {
+    when(() => F.alt < W.CLOUD_ALT + 48, () => queue('backThrough', () => F.alt < W.CLOUD_ALT - 70));
+    when(() => F.alt < W.CLOUD_ALT - 80, () => queue('ground', () => s.t > TD - 16));
+    at(TD - 15, () => {
       gearDown();
-      cap('gearDown');
+      queue('gearDown');
     });
-    at(35, () => setFlaps(1));
-    at(44, () => {
+    at(TD - 8, () => setFlaps(1));
+    at(TD, () => {
       sound.touchdown();
       buzz(1, 220);
       later(0.35, () => sound.spoilers());
@@ -727,33 +843,79 @@ function startSeq(name) {
         buzz(0.6, 140);
       });
       F.spoilT = 1;
-      F.engineT = 0.85;
-      later(0.9, () => (F.revT = 1));
-      cap('touchdown');
+      // reverse thrust a moment after the wheels are down, so the "dunk" and the nose
+      // wheel are heard clearly before the engines roar
+      later(1.7, () => {
+        F.engineT = 0.85;
+        F.revT = 1;
+      });
+      s.capQ.length = 0;
+      talk('touchdown', true);
     });
-    at(50, () => {
+    at(TD + 6, () => {
       F.engineT = 0.15;
       later(1.2, () => (F.revT = 0));
     });
-    at(60, () => {
+    when(() => stopped && s.t >= s.busy + 1, () => {
       sound.ding();
       cabin.setSign(false);
       F.spoilT = 0;
       setFlaps(0);
-      cap('welcome');
+      const d = talk('welcome');
+      at(s.t + d + 1.5, () => go('done'));
     });
-    at(64, () => go('done'));
     s.tick = (t, dt) => {
-      if (t < 44) {
-        F.alt = a0 * (1 - smooth((t - 3) / 41));
+      if (t < TD) {
+        F.alt = a0 * (1 - smooth((t - 3) / (TD - 3)));
         F.v = 65;
       } else {
         F.alt = 0;
-        F.v = Math.max(t > 60 ? 0 : 8, F.v - 3.4 * dt);
+        F.v = Math.max(t > TD + 16 ? 0 : 8, F.v - 3.4 * dt);
+        if (t > TD + 16) stopped = true;
       }
     };
   }
   seq = s;
+}
+
+// ------------------------------------------------------------ safety demo
+// crew(key): the cabin crew's announcement, through the cabin loudspeakers
+function crew(key) {
+  const text = L.crew[key];
+  const st = STEPS[cur];
+  panel.set({ title: L.crewTitle, text, buttons: [], calm: true, progress: st.progress });
+  caption.set({ title: L.crewTitle, text, textSize: 44, titleSize: 64 });
+  caption.mesh.visible = true;
+  return voice.say(text, { pa: true });
+}
+
+function tryPanel() {
+  const w = words('safetyTry');
+  const lines = L.tasks.map(([k, label]) => (tryState.done.has(k) ? '★  ' : '☆  ') + label).join('\n');
+  panel.set({ ...stepContent(STEPS[cur]), title: w.title, text: lines, textSize: 34 });
+}
+function startTry() {
+  tryState = { done: new Set(), busyUntil: 0, finishing: false };
+  safety.highlight(L.tasks.map(([k]) => k));
+  tryPanel();
+  say(words('safetyTry').title, words('safetyTry').text);
+}
+function hitTarget(key) {
+  if (!tryState || tryState.done.has(key) || tryState.finishing) return;
+  tryState.done.add(key);
+  sound.ding();
+  buzz(0.4, 60);
+  if (key === 'card') safety.showCard(7);
+  if (key === 'vest') safety.showVest(6);
+  if (key === 'exit') safety.lights(true, 5);
+  safety.highlight(L.tasks.map(([k]) => k).filter((k) => !tryState.done.has(k)));
+  tryPanel();
+  const d = voice.say(L.tryHit[key]);
+  nimbus.talk();
+  if (tryState.done.size === L.tasks.length) {
+    tryState.finishing = true;
+    later(d + 1.2, () => STEPS[cur].id === 'safetyTry' && go('safetyDone'));
+  }
 }
 
 function updateSeq(dt) {
@@ -761,6 +923,19 @@ function updateSeq(dt) {
   const s = seq;
   s.t += dt;
   s.tick(s.t, dt);
+  if (s.capQ.length && s.t >= s.busy + 0.6) {
+    const q = s.capQ.shift();
+    if (!(q.stale && q.stale())) {
+      s.busy = s.t + cap(q.key);
+      if (q.after) q.after();
+    }
+  }
+  if (s.chain.length && s.t >= Math.max(s.ready, s.busy) + s.chain[0].gap) {
+    const e = s.chain.shift();
+    const d = e.fn();
+    if (seq !== s) return;
+    s.ready = s.t + (typeof d === 'number' ? d : 0);
+  }
   for (const e of s.events) {
     if (e.fired) continue;
     if ((e.t !== undefined && s.t >= e.t) || (e.cond && e.cond())) {
@@ -815,6 +990,17 @@ function pickPanel() {
   const h = raycaster.intersectObject(panel.mesh, false);
   return h[0] || null;
 }
+// things you can point at during the safety missions
+function pickTarget() {
+  if (!tryState) return null;
+  let best = null;
+  for (const [k, o] of Object.entries(safety.targets)) {
+    if (tryState.done.has(k)) continue;
+    const h = raycaster.intersectObject(o, true)[0];
+    if (h && (!best || h.distance < best.h.distance)) best = { k, h };
+  }
+  return best;
+}
 function haptic(c, v = 0.3, ms = 30) {
   try {
     const a = c.userData.src && c.userData.src.gamepad && c.userData.src.gamepad.hapticActuators;
@@ -832,7 +1018,14 @@ function buzz(amp, ms, delay = 0) {
 function onSelect(c) {
   aim(c);
   const h = pickPanel();
-  if (!h) return;
+  if (!h) {
+    const t = pickTarget();
+    if (t) {
+      haptic(c, 0.6, 50);
+      hitTarget(t.k);
+    }
+    return;
+  }
   const i = panel.hit(h.uv);
   if (i >= 0) {
     haptic(c);
@@ -856,8 +1049,15 @@ function updateXRHover() {
       const i = panel.hit(h.uv);
       if (i >= 0) hov = i;
     } else {
-      line.scale.z = 1.5;
-      dot.visible = false;
+      const t = pickTarget();
+      if (t) {
+        line.scale.z = t.h.distance;
+        dot.position.copy(t.h.point);
+        dot.visible = true;
+      } else {
+        line.scale.z = 1.5;
+        dot.visible = false;
+      }
     }
   }
   panel.setHover(hov);
@@ -901,6 +1101,10 @@ cvs.addEventListener('pointerup', (e) => {
   if (drag && !drag.moved) {
     const i = pickAt(e);
     if (i >= 0) action(panel.rects[i].action);
+    else {
+      const t = pickTarget();
+      if (t) hitTarget(t.k);
+    }
   }
   drag = null;
 });
@@ -1029,6 +1233,7 @@ function setLanguage(code) {
   panel.labels = caption.labels = L.ui;
   terminal.setBoard(L.board);
   voice.setLang(L.speech);
+  safety.setLang(code);
   renderVoiceNote();
   renderXrMsg();
   if (!running) panel.set({ title: L.ui.idle, text: '', buttons: [], calm: false });
@@ -1122,4 +1327,4 @@ if (/[?&]debug\b/.test(location.search)) window.__fly = {
     return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight, action: r.action };
   },
   info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles }),
-  go, F, tick, action, get step() { return STEPS[cur] && STEPS[cur].id; }, setView: (y, p) => ((yaw = y), (pitch = p)), lean: (x, y, z) => camOff.set(x, y, z), scene, outside, plane, begin, sound };
+  go, F, tick, action, get step() { return STEPS[cur] && STEPS[cur].id; }, setView: (y, p) => ((yaw = y), (pitch = p)), lean: (x, y, z) => camOff.set(x, y, z), scene, outside, plane, voice, L: () => L, safety, hit: (k) => hitTarget(k), panelText: () => panel.content && panel.content.text, begin, sound };

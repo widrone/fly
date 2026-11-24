@@ -204,7 +204,9 @@ export class Sound {
 
     this.amb = this._g(1); // ambience (ducked while Nimbus speaks)
     this.focus = this._g(1); // dips briefly so big moments (wheels, touchdown) stand out
-    this._chain(this.amb, this.focus, this.out);
+    // the whole background sits a little lower than the sounds we want you to learn
+    this.bedLevel = this._g(0.6);
+    this._chain(this.amb, this.bedLevel, this.focus, this.out);
     this.fx = this._g(1); // events
     this.fx.connect(this.out);
     this.verb = c.createConvolver();
@@ -223,8 +225,11 @@ export class Sound {
     const W = this.buf.white, P = this.buf.pink, B = this.buf.brown;
 
     // ---- cabin air (vents, packs)
+    // softer than before: less high hiss, a little more of the low "whoosh" of the air packs
     L.air = this._g(0);
-    this._chain(this._src(P[0]), this._f('highpass', 300), this._f('lowpass', 7500), this._f('peaking', 2200, 0.8, 3), L.air, this._spatial(POS.vent, { roll: 0.3 }));
+    const airOut = this._spatial(POS.vent, { roll: 0.3 });
+    this._chain(this._src(P[0]), this._f('highpass', 260), this._f('lowpass', 3800, 0.6), this._f('peaking', 1200, 0.8, 1.5), this._f('highshelf', 2500, 0.7, -6), L.air, airOut);
+    this._chain(this._src(B[2], 0.9), this._f('lowpass', 420, 0.7), this._f('highpass', 70), this._g(0.55), L.air);
 
     // ---- airflow over the fuselage (stereo, wide)
     L.flowF = [];
@@ -403,7 +408,7 @@ export class Sound {
     if (this.ctx) this._ramp(this.hapLevel.gain, level * 0.7, 0.05);
   }
   duck(on) {
-    if (this.ctx) this._ramp(this.amb.gain, on ? 0.6 : 1, on ? 0.15 : 0.6);
+    if (this.ctx) this._ramp(this.amb.gain, on ? 0.5 : 1, on ? 0.2 : 0.9);
   }
   // pull the background down for a moment so an event is clearly heard
   _spotlight(delay, dur, depth = 0.5) {
@@ -461,7 +466,9 @@ export class Sound {
     // cabin
     const v = cabin ? s.v : 0;
     const vv = clamp(v / 80, 0, 1.2);
-    r(L.air.gain, cabin ? (s.ground && v < 1 ? 0.8 : 0.45) : 0, 0.5);
+    // the air goes quiet for a moment while an engine starts (it borrows the air to spin up)
+    const starting = s.n.some((n) => n > 0.03 && n < 0.9) && s.ground;
+    r(L.air.gain, cabin ? (starting ? 0.12 : s.ground && v < 1 ? 0.42 : 0.28) : 0, starting ? 1.2 : 0.8);
     r(L.flow.gain, cabin ? 0.07 + 0.55 * vv * vv : 0, 0.3);
     L.flowF.forEach((f) => r(f.frequency, 260 + 900 * vv, 0.3));
     L.eng.forEach((e, i) => {
@@ -513,6 +520,12 @@ export class Sound {
           else if (pick < 0.85) this.cargoThump();
           else this.callBell();
           T.life = 1.2 + R() * 2.2;
+        } else if (s.phase === 'taxi') {
+          const pick = R();
+          if (pick < 0.45) this.creak();
+          else if (pick < 0.75) this.rattle();
+          else this.seatCreak();
+          T.life = 3 + R() * 4;
         } else if (s.phase === 'cruise') {
           const pick = R();
           if (pick < 0.55) this.clink(POS.galley, 0.5);
@@ -561,6 +574,13 @@ export class Sound {
     this._chain(o, g, dest);
     o.start(t);
     o.stop(t + dur + 0.05);
+  }
+  // an audible knock: a short pitched thud plus a little click, for things you should HEAR
+  // (not only feel): runway joints, bumps, the wheels touching down
+  _knock(dest, { f = 220, amp = 0.5, delay = 0, dur = 0.12 } = {}) {
+    this._hit(dest, { f0: f, f1: f * 0.6, dur, amp, delay, attack: 0.002 });
+    this._hit(dest, { f0: f * 2.3, f1: f * 1.5, dur: dur * 0.5, amp: amp * 0.35, delay, attack: 0.001 });
+    this._burst(dest, { type: 'lowpass', f: 1800, dur: 0.035, amp: amp * 0.5, delay });
   }
   _burst(dest, { type = 'lowpass', f = 500, Q = 0.7, dur = 0.2, amp = 0.3, delay = 0, attack = 0.003, buf = 'white', f1 = null, rate = 1 }) {
     const c = this.ctx;
@@ -615,9 +635,9 @@ export class Sound {
     if (!this.ctx) return;
     const d = this._at3d(POS.ding, { verb: 0.5, roll: 0.3 });
     const chime = (f, s) => {
-      this._tone(d, { f, dur: 2.4, amp: 0.3, delay: s });
-      this._tone(d, { f: f * 2, dur: 1.3, amp: 0.05, delay: s });
-      this._tone(d, { f: f * 3.01, dur: 0.6, amp: 0.025, delay: s });
+      this._tone(d, { f, dur: 2.4, amp: 0.45, delay: s });
+      this._tone(d, { f: f * 2, dur: 1.3, amp: 0.08, delay: s });
+      this._tone(d, { f: f * 3.01, dur: 0.6, amp: 0.04, delay: s });
     };
     chime(1046.5, 0);
     chime(830.6, 0.6);
@@ -631,8 +651,8 @@ export class Sound {
   paChime() {
     const d = this._at3d([0, 2.5, 1.5], { verb: 0.8, roll: 0.2 });
     [784, 988, 1175].forEach((f, i) => {
-      this._tone(d, { f, dur: 2.2, amp: 0.09, delay: i * 0.45 });
-      this._tone(d, { f: f * 2, dur: 1, amp: 0.015, delay: i * 0.45 });
+      this._tone(d, { f, dur: 2.2, amp: 0.17, delay: i * 0.45 });
+      this._tone(d, { f: f * 2, dur: 1, amp: 0.03, delay: i * 0.45 });
     });
   }
   click() {
@@ -692,7 +712,10 @@ export class Sound {
     this._hit(d, { f0: 70, f1: 35, dur: 0.6, amp: 0.9, delay: 0.85 });
     this._burst(d, { type: 'lowpass', f: 900, dur: 0.35, amp: 0.6, delay: 0.85 });
     this._burst(d, { type: 'bandpass', f: 420, Q: 8, dur: 0.8, amp: 0.25, delay: 0.85 });
-    this._burst(d, { type: 'bandpass', f: 1800, Q: 2, dur: 0.15, amp: 0.4, delay: 1.25 }); // latch
+    this._burst(d, { type: 'bandpass', f: 850, Q: 2, dur: 0.12, amp: 0.9, delay: 0.85 }); // the heavy "clack"
+    this._burst(d, { type: 'bandpass', f: 1800, Q: 2, dur: 0.15, amp: 0.9, delay: 1.25 }); // latch
+    this._burst(d, { type: 'bandpass', f: 2600, Q: 5, dur: 0.06, amp: 0.6, delay: 1.33 });
+    this._knock(d, { f: 140, amp: 0.8, delay: 0.85, dur: 0.25 });
     this._burst(d, { type: 'highpass', f: 300, dur: 1.4, amp: 0.12, delay: 1.3, attack: 0.2 }); // pressure
     this.feel(0.4, { delay: 0.85, dur: 0.4 });
   }
@@ -701,9 +724,9 @@ export class Sound {
     if (!this.ctx) return;
     const e = this.L.eng[side === 'L' ? 0 : 1];
     const d = this._at3d(side === 'L' ? POS.engL : POS.engR, { ref: 5, roll: 0.55, lp: 3400, verb: 0.1 }, 12);
-    this._tone(d, { f: 180, f1: 1500, dur: 7, amp: 0.16, attack: 1.5 });
-    this._tone(d, { f: 360, f1: 3000, dur: 7, amp: 0.05, attack: 1.5 });
-    this._burst(d, { type: 'bandpass', f: 500, f1: 1600, Q: 0.7, dur: 6, amp: 0.25, attack: 2, buf: 'pink' });
+    this._tone(d, { f: 180, f1: 1500, dur: 7, amp: 0.3, attack: 1.5 });
+    this._tone(d, { f: 360, f1: 3000, dur: 7, amp: 0.09, attack: 1.5 });
+    this._burst(d, { type: 'bandpass', f: 500, f1: 1600, Q: 0.7, dur: 6, amp: 0.42, attack: 2, buf: 'pink' });
     this._burst(d, { type: 'lowpass', f: 300, f1: 900, dur: 2.6, amp: 1.0, delay: 2.6, attack: 0.25, buf: 'brown' });
     this._hit(d, { f0: 60, f1: 40, dur: 1.0, amp: 0.5, delay: 2.6, attack: 0.08 });
     this._spotlight(2.5, 1.6, 0.65);
@@ -723,14 +746,27 @@ export class Sound {
     o.frequency.linearRampToValueAtTime(95, t + dur);
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.28, t + 0.4);
-    g.gain.setValueAtTime(0.28, t + dur - 0.5);
+    g.gain.exponentialRampToValueAtTime(1.4, t + 0.4);
+    g.gain.setValueAtTime(1.4, t + dur - 0.5);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     const am = this._g(0.7);
     const lfo = c.createOscillator();
     lfo.frequency.value = 23;
     this._chain(lfo, this._g(0.3), am.gain);
     this._chain(o, this._f('bandpass', 650, 1.5), am, g, d);
+    // the motor's whine, a little higher, so you can pick it out from the engines
+    const o2 = c.createOscillator();
+    o2.type = 'triangle';
+    o2.frequency.setValueAtTime(880, t);
+    o2.frequency.linearRampToValueAtTime(1200, t + 0.6);
+    o2.frequency.setValueAtTime(1200, t + dur - 0.6);
+    o2.frequency.linearRampToValueAtTime(760, t + dur);
+    const g2 = c.createGain();
+    g2.gain.value = 0.07;
+    this._chain(o2, g2, g);
+    o2.start(t);
+    o2.stop(t + dur + 0.1);
+    this._spotlight(0.2, dur - 0.4, 0.6);
     o.start(t);
     lfo.start(t);
     o.stop(t + dur + 0.1);
@@ -781,7 +817,7 @@ export class Sound {
     if (!this.ctx) return;
     const d = this._at3d(POS.gearMain, { verb: 0.12, ref: 1.6, roll: 0.3 }, 8);
     this._spotlight(0.2, 4.6, 0.35);
-    this._hydraulics(d, 6.2, 0.45);
+    this._hydraulics(d, 6.2, 0.6);
     this._hit(d, { f0: 90, f1: 45, dur: 0.35, amp: 0.8, delay: 0.35 }); // doors open
     this._burst(d, { type: 'lowpass', f: 900, dur: 0.2, amp: 0.5, delay: 0.35 });
     this.feel(0.4, { delay: 0.35, dur: 0.3 });
@@ -798,7 +834,7 @@ export class Sound {
     if (!this.ctx) return;
     const d = this._at3d(POS.gearMain, { verb: 0.12, ref: 1.6, roll: 0.3 }, 8);
     this._spotlight(0.3, 3.4, 0.4);
-    this._hydraulics(d, 5.6, 0.45);
+    this._hydraulics(d, 5.6, 0.6);
     this._hit(d, { f0: 95, f1: 42, dur: 0.45, amp: 1.0, delay: 0.6 }); // doors open
     this._burst(d, { type: 'lowpass', f: 1000, dur: 0.25, amp: 0.6, delay: 0.6 });
     this.feel(0.5, { delay: 0.6, dur: 0.4 });
@@ -812,33 +848,80 @@ export class Sound {
   touchdown() {
     if (!this.ctx) return;
     const d = this._at3d(POS.gearMain, { verb: 0.1, ref: 1.6, roll: 0.3 }, 6);
-    this._spotlight(0, 0.9, 0.55);
     this._hit(d, { f0: 70, f1: 28, dur: 0.8, amp: 1.0 });
     this._burst(d, { type: 'lowpass', f: 700, dur: 0.4, amp: 0.8 });
-    this._burst(d, { type: 'bandpass', f: 2600, Q: 3, dur: 0.14, amp: 0.35, delay: 0.01 }); // tyre chirp
-    this._burst(d, { type: 'bandpass', f: 2300, Q: 3, dur: 0.12, amp: 0.3, delay: 0.09 });
+    this._knock(d, { f: 130, amp: 1.3, dur: 0.3 }); // the "dunk"
+    this._knock(d, { f: 120, amp: 0.5, dur: 0.25, delay: 0.12 });
+    // tyre chirps: short squeaks as the still wheels spin up
+    this._tone(d, { f: 2100, f1: 1500, dur: 0.12, amp: 0.12, type: 'sawtooth' });
+    this._tone(d, { f: 1900, f1: 1400, dur: 0.1, amp: 0.1, delay: 0.1, type: 'sawtooth' });
+    this._burst(d, { type: 'bandpass', f: 2600, Q: 2, dur: 0.16, amp: 1.4, delay: 0.01 });
+    this._burst(d, { type: 'bandpass', f: 2300, Q: 2, dur: 0.14, amp: 1.2, delay: 0.1 });
     this.feel(1.0, { dur: 0.7, f0: 50, f1: 28 });
   }
   noseDown() {
     if (!this.ctx) return;
     const d = this._at3d([1.4, -2.5, -10], { verb: 0.1, ref: 2 }, 3);
-    this._hit(d, { f0: 65, f1: 35, dur: 0.5, amp: 0.6 });
-    this._burst(d, { type: 'lowpass', f: 500, dur: 0.3, amp: 0.4 });
+    this._hit(d, { f0: 65, f1: 35, dur: 0.5, amp: 0.9 });
+    this._burst(d, { type: 'lowpass', f: 500, dur: 0.3, amp: 0.6 });
+    this._knock(d, { f: 170, amp: 1.8, dur: 0.22 });
     this.feel(0.55, { dur: 0.45 });
   }
   spoilers() {
     if (!this.ctx) return;
     const d = this._at3d(POS.wing, { verb: 0.1, ref: 3 }, 4);
     this._burst(d, { type: 'lowpass', f: 350, f1: 200, dur: 2.5, amp: 0.6, attack: 0.15, buf: 'brown' });
+    this._burst(d, { type: 'bandpass', f: 700, f1: 420, Q: 0.8, dur: 2.0, amp: 2.2, attack: 0.1, buf: 'pink' }); // air on the raised panels
+    this._knock(d, { f: 240, amp: 0.6, delay: 0.05, dur: 0.08 }); // panels clack up
     this.feel(0.3, { dur: 1.2, f0: 36, f1: 33 });
+  }
+  // the jet bridge pulling back: electric motor hum, tyres on concrete, warning beeps
+  bridge(dur = 6) {
+    if (!this.ctx) return;
+    const d = this._at3d([-8, -1.5, -9.4], { verb: 0.15, ref: 4, lp: 1800 }, dur + 2);
+    this._tone(d, { f: 118, f1: 112, dur, amp: 0.05, attack: 0.6, type: 'sawtooth' });
+    this._burst(d, { type: 'lowpass', f: 260, dur, amp: 0.18, attack: 0.5, buf: 'brown' });
+    for (let i = 0; i < Math.floor(dur / 1.1); i++) this._tone(d, { f: 1480, dur: 0.32, amp: 0.035, delay: 0.4 + i * 1.1, type: 'square' });
+    this._hit(d, { f0: 70, f1: 45, dur: 0.3, amp: 0.25, delay: dur - 0.3 });
+  }
+  // the baggage tractor and its carts driving away
+  tugAway() {
+    if (!this.ctx) return;
+    const d = this._at3d([-14, -3, 4], { verb: 0.1, ref: 6, lp: 1400 }, 9);
+    const c = this.ctx, t = this.now;
+    const o = c.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(34, t);
+    o.frequency.linearRampToValueAtTime(48, t + 2);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.07, t + 0.8);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 8);
+    this._chain(o, this._f('lowpass', 300, 1.2), g, d);
+    o.start(t);
+    o.stop(t + 8.1);
+    for (let i = 0; i < 5; i++) this._burst(d, { type: 'bandpass', f: 900, Q: 3, dur: 0.12, amp: 0.05 * (1 - i / 6), delay: 0.6 + i * 0.7 }); // carts rattling
+  }
+  // parking brake off: a soft hiss and a small lurch as the plane starts to move
+  brakeRelease() {
+    if (!this.ctx) return;
+    const d = this._at3d(POS.gearMain, { verb: 0.05, ref: 2 }, 3);
+    this._burst(d, { type: 'bandpass', f: 1800, Q: 1.2, dur: 0.7, amp: 0.25, attack: 0.05 });
+    this._hit(d, { f0: 55, f1: 40, dur: 0.5, amp: 0.5, delay: 1.2 });
+    this._knock(d, { f: 160, amp: 0.75, delay: 1.2, dur: 0.18 });
+    this.feel(0.18, { delay: 1.2, dur: 0.5, f0: 40, f1: 32 });
+    this.creak();
   }
   // runway joints / centreline lights: "ba-dum" from under the floor
   joint(v) {
     if (!this.ctx) return;
     const k = Math.min(1, v / 50);
     const d = this._at3d(POS.floor, { verb: 0.05, ref: 1.5, roll: 0.3 }, 2);
-    this._hit(d, { f0: 75, f1: 45, dur: 0.18, amp: 0.25 + 0.35 * k });
-    this._hit(d, { f0: 70, f1: 42, dur: 0.18, amp: 0.2 + 0.3 * k, delay: 0.09 });
+    this._hit(d, { f0: 75, f1: 45, dur: 0.18, amp: 0.4 + 0.5 * k });
+    this._hit(d, { f0: 70, f1: 42, dur: 0.18, amp: 0.32 + 0.45 * k, delay: 0.09 });
+    // a knock you can hear, not just feel
+    this._knock(d, { f: 190, amp: 0.3 + 0.35 * k });
+    this._knock(d, { f: 175, amp: 0.25 + 0.3 * k, delay: 0.09 });
     this.feel(0.12 + 0.3 * k, { dur: 0.15, f0: 46, f1: 36 });
     this.feel(0.1 + 0.25 * k, { dur: 0.15, f0: 46, f1: 36, delay: 0.09 });
   }
@@ -847,9 +930,10 @@ export class Sound {
     if (!this.ctx) return;
     this._burst(this.amb, { type: 'lowpass', f: 160, dur: 0.6, amp: 0.5 * amp, attack: 0.05, buf: 'brown' });
     this._hit(this.fx, { f0: 55, f1: 38, dur: 0.45, amp: 0.35 * amp, attack: 0.03 });
+    this._knock(this.fx, { f: 150, amp: 0.55 * amp, dur: 0.2 }); // the cabin "thump"
     this.feel(0.9 * amp, { dur: 0.55, f0: 40, f1: 30 });
     if (Math.random() < 0.6) this.creak();
-    if (Math.random() < 0.7) this.rattle();
+    this.rattle();
     if (amp > 0.4 && Math.random() < 0.6) this.clink(POS.tray, 1.5);
   }
   windChime() {
@@ -962,8 +1046,10 @@ export class Voice {
     fetch(base + 'index.json')
       .then((r) => (r.ok ? r.json() : []))
       .then((list) => {
-        if (!Array.isArray(list) || !list.length) return;
-        this.clips[lang] = { base, names: new Set(list) };
+        // index.json: { "file.mp3": seconds, ... } (or a plain list of file names)
+        const names = new Map(Array.isArray(list) ? list.map((n) => [n, 0]) : Object.entries(list || {}));
+        if (!names.size) return;
+        this.clips[lang] = { base, names };
         this._pick();
         if (this.onVoices) this.onVoices();
         if (this.ctx) this._prefetch();
@@ -977,12 +1063,47 @@ export class Voice {
     this.out = ctx.createGain();
     this.out.gain.value = 1.0;
     this.out.connect(ctx.destination);
+    // cabin loudspeaker for the crew: thin, a little boxy, from several speakers at once
+    this.pa = ctx.createGain();
+    this.pa.gain.value = 0.9;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 420;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 3600;
+    const pk = ctx.createBiquadFilter();
+    pk.type = 'peaking';
+    pk.frequency.value = 1700;
+    pk.Q.value = 1.1;
+    pk.gain.value = 5;
+    const sh = ctx.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) {
+      const x = (i / 1023) * 2 - 1;
+      curve[i] = Math.tanh(x * 1.8) / Math.tanh(1.8);
+    }
+    sh.curve = curve;
+    this.pa.connect(hp);
+    hp.connect(pk);
+    pk.connect(sh);
+    sh.connect(lp);
+    lp.connect(this.out);
+    for (const [ms, g] of [[14, 0.45], [31, 0.3], [55, 0.18]]) {
+      const d = ctx.createDelay(0.2);
+      d.delayTime.value = ms / 1000;
+      const gg = ctx.createGain();
+      gg.gain.value = g;
+      lp.connect(d);
+      d.connect(gg);
+      gg.connect(this.out);
+    }
     this._prefetch();
   }
   _prefetch() {
     const c = this.clips[this.lang];
     if (!c || !this.ctx) return;
-    for (const n of c.names) this._buffer(c.base + n);
+    for (const n of c.names.keys()) this._buffer(c.base + n);
   }
   _buffer(url) {
     if (!this.buffers.has(url)) {
@@ -998,7 +1119,14 @@ export class Voice {
     const c = this.clips[this.lang];
     if (!c || !this.ctx) return null;
     const n = clipName(speechText(text));
-    return c.names.has(n) ? c.base + n : null;
+    return c.names.has(n) ? { url: c.base + n, dur: c.names.get(n) } : null;
+  }
+  // roughly how long a line takes to say (or to read, when the voice is off)
+  estimate(text) {
+    const t = speechText(text || '');
+    const clip = this.on && this._clipFor(t);
+    if (clip && clip.dur) return clip.dur;
+    return 0.4 + t.length * (this.on && this.available ? 0.075 : 0.055);
   }
   setLang(code) {
     this.lang = code;
@@ -1025,11 +1153,16 @@ export class Voice {
     // Norwegian is only spoken with a real Norwegian voice (or a recording), never by an English one.
     this.available = hasClips || !!this.voice || (!nb && vs.length === 0);
   }
-  say(text) {
-    if (!this.on || !text) return;
+  // speaks a line; returns about how many seconds it will take.
+  // { pa: true } plays it through the cabin loudspeakers (the crew's announcements).
+  say(text, { pa = false } = {}) {
+    if (!text) return 0;
+    const dur = this.estimate(text);
+    if (!this.on) return dur;
     this.stop(false);
-    const url = this._clipFor(text);
-    if (url) {
+    const clip = this._clipFor(text);
+    if (clip) {
+      const url = clip.url;
       const my = ++this.token;
       this._buffer(url)
         .then((buf) => {
@@ -1037,7 +1170,7 @@ export class Voice {
           if (this.ctx.state === 'suspended') this.ctx.resume();
           const s = this.ctx.createBufferSource();
           s.buffer = buf;
-          s.connect(this.out);
+          s.connect(pa && this.pa ? this.pa : this.out);
           s.onended = () => {
             if (this.src === s) {
               this.src = null;
@@ -1049,9 +1182,10 @@ export class Voice {
           if (this.onSpeaking) this.onSpeaking(true);
         })
         .catch(() => my === this.token && this._tts(text));
-      return;
+      return dur;
     }
     this._tts(text);
+    return dur;
   }
   _tts(text) {
     if (!this.ok || !this.available || (this.lang === 'nb' && !this.voice)) return;
